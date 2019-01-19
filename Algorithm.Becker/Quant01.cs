@@ -1,15 +1,33 @@
 ﻿using System;
 using System.Collections.Generic;
 using QuantConnect.Data;
+using QuantConnect.Brokerages;
 using QuantConnect.Interfaces;
 using QuantConnect.Data.Consolidators;
 using QuantConnect.Data.Market;
+using QuantConnect.Indicators;
 
 namespace QuantConnect.Algorithm.Becker
 {
     public class Quant01 : QCAlgorithm, IRegressionAlgorithmDefinition
     {
         private Symbol _eth = QuantConnect.Symbol.Create("ETHUSD", SecurityType.Crypto, Market.GDAX);
+        private static RelativeStrengthIndex _rsi;
+
+        const double buySize = 50;
+        const double rsiLow = 15.9;
+        const double rsiLowReset = 25;
+        const double rsiHigh = 84.9;
+        const double rsiHighReset = 75;
+        const int rsiPeriods = 10;
+        const int consolidatorMinutes = 3;
+
+
+        private bool buyCocked = false;
+        private bool buyFired = false;
+        private bool sellCocked = false;
+        private bool sellFired = false;
+
 
         /// <summary>
         /// Initialise the data and resolution required, as well as the cash and start-end dates for your algorithm. All algorithms must initialized.
@@ -18,18 +36,31 @@ namespace QuantConnect.Algorithm.Becker
         {
             SetStartDate(2018, 4, 4);  //Set Start Date
             SetEndDate(2018, 4, 5);    //Set End Date
-            SetCash(100000);             //Set Strategy Cash
+            SetCash(10000);            //Set Strategy Cash
+            SetBrokerageModel(BrokerageName.GDAX, AccountType.Cash);
 
             AddCrypto("ETHUSD", Resolution.Minute);
-            var threeMinutes = new TradeBarConsolidator(TimeSpan.FromMinutes(3));
-            threeMinutes.DataConsolidated += OnThreeMinutes;
-            SubscriptionManager.AddConsolidator("ETHUSD", threeMinutes);
+
+            var consolidator = new TradeBarConsolidator(TimeSpan.FromMinutes(consolidatorMinutes));
+            consolidator.DataConsolidated += OnConsolidated;
+            SubscriptionManager.AddConsolidator("ETHUSD", consolidator);
+
+            _rsi = new RelativeStrengthIndex(10, MovingAverageType.Simple);
 
         }
 
-        public void OnThreeMinutes(object sender, TradeBar bar)
+        public void OnConsolidated(object sender, TradeBar bar)
         {
-            //Debug(Time.ToString("u") + " " + bar);
+            _rsi.Update(bar.EndTime, bar.Close);
+            SetSignals(bar);
+            if (buyCocked && !buyFired)
+            {
+                PlaceBuy(bar);
+            }
+            if (sellCocked && !sellFired)
+            {
+                PlaceSell(bar);
+            }
         }
 
         /// <summary>
@@ -38,10 +69,10 @@ namespace QuantConnect.Algorithm.Becker
         /// <param name="data">Slice object keyed by symbol containing the stock data</param>
         public override void OnData(Slice data)
         {
-            if (!Portfolio.Invested)
-            {
-                Debug(Time.ToString("u") + " " + data);
-            }
+            //if (!Portfolio.Invested)
+            //{
+                //Debug(Time.ToString("u") + " " + data.Bars[_eth].Close);
+            //}
         }
 
         /// <summary>
@@ -79,6 +110,62 @@ namespace QuantConnect.Algorithm.Becker
             {"Treynor Ratio", "0.011"},
             {"Total Fees", "$3.26"}
         };
+
+        #region "helpers"
+
+        private void SetSignals(TradeBar bar)
+        {
+            if (_rsi.IsReady)
+            {
+                var rsiValue = _rsi;
+                if (_rsi <= rsiLow)
+                {
+                    if (!buyCocked)
+                    {
+                        buyCocked = true;
+                    }
+                }
+                else
+                {
+                    if (_rsi >= rsiLowReset && buyCocked)
+                    {
+                        buyCocked = false;
+                        buyFired = false;
+                    }
+                }
+
+                if (_rsi >= rsiHigh)
+                {
+                    if (!sellCocked)
+                    {
+                        sellCocked = true;
+                    }
+                }
+                else
+                {
+                    if (_rsi <= rsiHighReset && sellCocked)
+                    {
+                        sellCocked = false;
+                        sellFired = false;
+                    }
+                }
+            }
+        }
+
+        private void PlaceBuy (TradeBar bar)
+        {
+            Debug("Trigger buy " + Time.ToString("u") + " " + bar);
+            buyFired = true;
+        }
+
+        private void PlaceSell (TradeBar bar)
+        {
+            Debug("Trigger sell " + Time.ToString("u") + " " + bar);
+            sellFired = true;
+        }
+
+        #endregion //helpers
+
     }
 }
 
