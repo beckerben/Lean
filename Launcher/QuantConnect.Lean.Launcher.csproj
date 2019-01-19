@@ -70,6 +70,10 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Algorithm.Becker\QuantConnect.Algorithm.Becker.csproj">
+      <Project>{888f8f48-80f0-441c-a8da-d90c60420fcd}</Project>
+      <Name>QuantConnect.Algorithm.Becker</Name>
+    </ProjectReference>
     <ProjectReference Include="..\Algorithm.CSharp\QuantConnect.Algorithm.CSharp.csproj">
       <Project>{39a81c16-a1e8-425e-a8f2-1433adb80228}</Project>
       <Name>QuantConnect.Algorithm.CSharp</Name>
