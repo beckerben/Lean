@@ -6,27 +6,32 @@ using QuantConnect.Interfaces;
 using QuantConnect.Data.Consolidators;
 using QuantConnect.Data.Market;
 using QuantConnect.Indicators;
+using QuantConnect.Orders;
 
 namespace QuantConnect.Algorithm.Becker
 {
     public class Quant01 : QCAlgorithm, IRegressionAlgorithmDefinition
     {
-        private Symbol _eth = QuantConnect.Symbol.Create("ETHUSD", SecurityType.Crypto, Market.GDAX);
-        private static RelativeStrengthIndex _rsi;
 
-        const double buySize = 50;
-        const double rsiLow = 15.9;
-        const double rsiLowReset = 25;
-        const double rsiHigh = 84.9;
-        const double rsiHighReset = 75;
+        //constants for configuraing bot
+        const string symbolName = "ETHUSD";
+        const decimal buySizeUSD = 50;
+        const double rsiLow = 20;
+        const double rsiLowReset = 40;
+        const double rsiHighReset = 60;
+        const double rsiHigh = 80;
         const int rsiPeriods = 10;
         const int consolidatorMinutes = 3;
 
-
+        //variables for signals
+        private Symbol symbol = QuantConnect.Symbol.Create(symbolName, SecurityType.Crypto, Market.GDAX);
+        private static RelativeStrengthIndex _rsi;
         private bool buyCocked = false;
         private bool buyFired = false;
         private bool sellCocked = false;
         private bool sellFired = false;
+
+        private readonly List<OrderTicket> openLimitOrders = new List<OrderTicket>();
 
 
         /// <summary>
@@ -38,14 +43,16 @@ namespace QuantConnect.Algorithm.Becker
             SetEndDate(2018, 4, 5);    //Set End Date
             SetCash(10000);            //Set Strategy Cash
             SetBrokerageModel(BrokerageName.GDAX, AccountType.Cash);
+            DefaultOrderProperties = new GDAXOrderProperties { PostOnly = true };
+            AddCrypto(symbolName, Resolution.Minute);
 
-            AddCrypto("ETHUSD", Resolution.Minute);
-
+            //setup the consolidator
             var consolidator = new TradeBarConsolidator(TimeSpan.FromMinutes(consolidatorMinutes));
             consolidator.DataConsolidated += OnConsolidated;
-            SubscriptionManager.AddConsolidator("ETHUSD", consolidator);
+            SubscriptionManager.AddConsolidator(symbol, consolidator);
 
-            _rsi = new RelativeStrengthIndex(10, MovingAverageType.Simple);
+            //define the RSI indicator
+            _rsi = new RelativeStrengthIndex(rsiPeriods,MovingAverageType.Simple);
 
         }
 
@@ -154,17 +161,34 @@ namespace QuantConnect.Algorithm.Becker
 
         private void PlaceBuy (TradeBar bar)
         {
-            Debug("Trigger buy " + Time.ToString("u") + " " + bar);
-            buyFired = true;
+            
+            if (bar.Close > 0)
+            {
+                Debug("Trigger buy " + Time.ToString("u") + " " + bar);
+                decimal qty = decimal.Divide(buySizeUSD, bar.Close);
+                var newTicket = LimitOrder(symbol, qty, TruncateDecimal(bar.Close * .999m,2));
+                openLimitOrders.Add(newTicket);
+                buyFired = true;
+            }
         }
 
         private void PlaceSell (TradeBar bar)
         {
             Debug("Trigger sell " + Time.ToString("u") + " " + bar);
+            Liquidate(symbol);
             sellFired = true;
         }
 
+        public decimal TruncateDecimal(decimal value, int precision)
+        {
+            decimal step = (decimal)Math.Pow(10, precision);
+            decimal tmp = Math.Truncate(step * value);
+            return tmp / step;
+        }
+
         #endregion //helpers
+
+
 
     }
 }
