@@ -14,7 +14,7 @@ namespace QuantConnect.Algorithm.Becker
     {
 
         //constants for configuraing bot
-        const string symbolName = "ETHUSD";
+        const string symbolName = "BTCUSD";
         const decimal buySizeUSD = 50;
         const double rsiLow = 20;
         const double rsiLowReset = 40;
