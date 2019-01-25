@@ -16,10 +16,10 @@ namespace QuantConnect.Algorithm.Becker
 
         //constants for configuraing bot
         const decimal buySizeUSD = 50;
-        const decimal stepUpPct = 1.01m;
-        const decimal stepDownPct = 0.995m;
-        const decimal seedDepthPct = 0.80m;
-        const decimal lossPct = 0.995m;
+        const decimal stepUpPct = 1.020m;
+        const decimal stepDownPct = 0.990m;
+        const decimal seedDepthPct = 0.85m;
+        const decimal lossPct = 0.990m;  //todo: not implemented
 
         //variables for trading
         const string symbolName = "ETHUSD";
@@ -35,10 +35,10 @@ namespace QuantConnect.Algorithm.Becker
         {
             SetStartDate(2018, 4, 4);  //Set Start Date
             SetEndDate(2018, 4, 5);    //Set End Date
-            SetCash(10000);            //Set Strategy Cash
+            SetCash(1000);            //Set Strategy Cash
             SetBrokerageModel(BrokerageName.GDAX, AccountType.Cash);
             DefaultOrderProperties = new GDAXOrderProperties { PostOnly = true };
-            AddCrypto(symbolName, Resolution.Second);
+            AddCrypto(symbolName, Resolution.Minute);
         }
 
 		/// <summary>
@@ -101,11 +101,16 @@ namespace QuantConnect.Algorithm.Becker
                     .Where(x => x.Symbol == symbolName)
                     .OrderByDescending(x => x.Price)
                     .FirstOrDefault();
+
+            var highestBuy = Transactions.GetOpenOrders(x => x.Direction == OrderDirection.Buy && x.Type == OrderType.Limit)
+                    .Where(x => x.Symbol == symbolName)
+                    .OrderBy(x => x.Price)
+                    .FirstOrDefault();
+
             if (lowestBuy.Price > (bar.Close * seedDepthPct * stepDownPct))
             {
                 //need to place more buy(s)
                 PlaceBuyOrders(bar, lowestBuy.Price);
-
             }
         }
 
@@ -131,7 +136,7 @@ namespace QuantConnect.Algorithm.Becker
             {
                 if (nextBuyPrice >= (bar.Close * seedDepthPct))
                 {
-                    PlaceBuy(nextBuyPrice);
+                    PlaceBuy(TruncateDecimal(nextBuyPrice,2));
                     
                 }
                 else
@@ -140,8 +145,8 @@ namespace QuantConnect.Algorithm.Becker
                 }
                 nextBuyPrice = nextBuyPrice * stepDownPct;
             }
-
         }
+        
 
         private void PlaceBuy(decimal buyPrice)
         {
