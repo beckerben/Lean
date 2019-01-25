@@ -11,34 +11,49 @@ using QuantConnect.Orders;
 
 namespace QuantConnect.Algorithm.Becker
 {
+    class OrderEntry
+    {
+        public int Id { get; set; }
+        public decimal Price { get; set; }
+        public decimal Qty { get; set; }
+    }
+
     public class Quant03 : QCAlgorithm, IRegressionAlgorithmDefinition
     {
 
+        #region "constants and variables"
         //constants for configuraing bot
-        const decimal buySizeUSD = 50;
-        const decimal stepUpPct = 1.020m;
-        const decimal stepDownPct = 0.990m;
-        const decimal seedDepthPct = 0.85m;
-        const decimal lossPct = 0.990m;  //todo: not implemented
+        //important: changing these constants after the strat has been running could have ill effect on the orders on the book already
+        const decimal orderEntryMaxPrice = 1500; //the max price the canned orderbook will go to
+        const decimal stepPct = 0.0025m; //the price change percentage for individual entries
+        const decimal realizeLossPct = 0.990m;  //todo: not implemented, will be the sell order bail threshold
 
         //variables for trading
         const string symbolName = "ETHUSD";
+        private decimal buySizeUSD = 20; //the position size in USD
+        private int sellSteps = 4; //the number of steps in the orderbook to go up to place a sell
+        private int buySteps = 2;  //the number of steps in the order book to place buys
+        private decimal seedDepthPct = 0.80m;//the percentage down from the current tick to have buy orders
         private Symbol symbol = QuantConnect.Symbol.Create(symbolName, SecurityType.Crypto, Market.GDAX);
         private readonly List<OrderTicket> openLimitOrders = new List<OrderTicket>();
+        private List<OrderEntry> OrderEntries = new List<OrderEntry>();
+        #endregion
 
-        private bool initialize = true;
-
+        #region "events"
         /// <summary>
         /// Initialise the data and resolution required, as well as the cash and start-end dates for your algorithm. All algorithms must initialized.
         /// </summary>
         public override void Initialize()
         {
-            SetStartDate(2018, 4, 4);  //Set Start Date
-            SetEndDate(2018, 4, 5);    //Set End Date
+            SetStartDate(2018, 4, 4); //Set Start Date
+            SetEndDate(2018, 4, 5);   //Set End Date
             SetCash(1000);            //Set Strategy Cash
             SetBrokerageModel(BrokerageName.GDAX, AccountType.Cash);
             DefaultOrderProperties = new GDAXOrderProperties { PostOnly = true };
             AddCrypto(symbolName, Resolution.Minute);
+
+            SetupOrderEntries();
+
         }
 
 		/// <summary>
@@ -47,20 +62,11 @@ namespace QuantConnect.Algorithm.Becker
         /// <param name="data">Slice object keyed by symbol containing the stock data</param>
         public override void OnData(Slice data)
         {
-
-            //on initialize, we will spin up seeding the buy orders
             if (data.Bars[symbol].Close > 0)
             {
-                if (initialize)
-                {
-                    initialize = false;
-                    PlaceBuyOrders(data.Bars[symbol]);
-                }
-                else
-                {
-                    CheckSeedDepth(data.Bars[symbol]);
-                    RealizeLosses();
-                }
+                CheckBuyDepth(data.Bars[symbol]);
+                //todo: code realizelosses to close out unrealized losses after some % loss or age?
+                //RealizeLosses();
             }
         }
 
@@ -70,96 +76,90 @@ namespace QuantConnect.Algorithm.Becker
         /// <param name="orderEvent">OrderEvent object with details about the order status</param>
         public override void OnOrderEvent(OrderEvent orderEvent)
         {
-            if (orderEvent.Status == OrderStatus.Canceled)
-            {
-                //todo: resubmit moving higher / lower, likely probably rejected due to price
-            }
+            //if (orderEvent.Status == OrderStatus.Canceled)
+            //{
+            //    //todo: resubmit moving higher / lower, likely probably rejected due to price
+            //}
 
-            if (orderEvent.Status.IsFill())
-            {
-                //Debug(Time + ": Filled: " + Transactions.GetOrderById(orderEvent.OrderId));
-                //place the opposite order
-                if (orderEvent.Direction == OrderDirection.Buy) 
-                {
-                    PlaceSell(TruncateDecimal(orderEvent.FillPrice * stepUpPct,2), -1 * orderEvent.FillQuantity);
-                }
-                if (orderEvent.Direction == OrderDirection.Sell)
-                {
-                    PlaceBuy(TruncateDecimal(orderEvent.FillPrice * stepDownPct, 2));
-                }
-            }
+            //if (orderEvent.Status.IsFill())
+            //{
+            //    //Debug(Time + ": Filled: " + Transactions.GetOrderById(orderEvent.OrderId));
+            //    //place the opposite order
+            //    if (orderEvent.Direction == OrderDirection.Buy) 
+            //    {
+            //        PlaceOrder(TruncateDecimal(orderEvent.FillPrice * stepUpPct,2), -1 * orderEvent.FillQuantity);
+            //    }
+            //    if (orderEvent.Direction == OrderDirection.Sell)
+            //    {
+            //        PlaceOrder(TruncateDecimal(orderEvent.FillPrice * stepDownPct, 2));
+            //    }
+            //}
         }
 
+        #endregion
 
         #region "helpers"
-       
 
-        private void CheckSeedDepth(TradeBar bar)
+        private void CheckBuyDepth(TradeBar bar)
         {
             //make sure there are buy orders down to the limit
-            var lowestBuy = Transactions.GetOpenOrders(x => x.Direction == OrderDirection.Buy && x.Type == OrderType.Limit)
+            var lowestOpenBuy = Transactions.GetOpenOrders(x => x.Direction == OrderDirection.Buy && x.Type == OrderType.Limit)
                     .Where(x => x.Symbol == symbolName)
                     .OrderByDescending(x => x.Price)
                     .FirstOrDefault();
 
-            var highestBuy = Transactions.GetOpenOrders(x => x.Direction == OrderDirection.Buy && x.Type == OrderType.Limit)
+            var highestOpenBuy = Transactions.GetOpenOrders(x => x.Direction == OrderDirection.Buy && x.Type == OrderType.Limit)
                     .Where(x => x.Symbol == symbolName)
                     .OrderBy(x => x.Price)
                     .FirstOrDefault();
+            
+            //todo: handle the initialize where there are no open orders
 
-            if (lowestBuy.Price > (bar.Close * seedDepthPct * stepDownPct))
+            var lowestBuyEntry = OrderEntries.Where(x => x.Price == lowestOpenBuy.Price).FirstOrDefault();
+            var highestBuyEntry = OrderEntries.Where(x => x.Price == highestOpenBuy.Price).FirstOrDefault();
+            var nextLowestBuyEntry = OrderEntries.Where(x => x.Id == (lowestBuyEntry.Id - buySteps)).FirstOrDefault();
+            var nextHighestBuyEntry = OrderEntries.Where(x => x.Id == (highestBuyEntry.Id + buySteps)).FirstOrDefault();
+            var seedDepthEntry = OrderEntries.Where(x => x.Price >= (bar.Price * seedDepthPct)).LastOrDefault();
+
+            //now look at the price compared to the high / low mark
+            while (nextLowestBuyEntry.Id >= seedDepthEntry.Id)
             {
-                //need to place more buy(s)
-                PlaceBuyOrders(bar, lowestBuy.Price);
+                PlaceOrder(nextLowestBuyEntry.Price, nextLowestBuyEntry.Qty);
+                nextLowestBuyEntry = OrderEntries.Where(x => x.Id == (nextLowestBuyEntry.Id - buySteps)).FirstOrDefault();
+            }
+            
+            while (nextHighestBuyEntry.Price <= bar.Price)
+            {
+                PlaceOrder(nextHighestBuyEntry.Price, nextHighestBuyEntry.Qty);
+                nextHighestBuyEntry = OrderEntries.Where(x => x.Id == (nextHighestBuyEntry.Id + buySteps)).FirstOrDefault();
+            }
+
+        }
+
+
+        /// <summary>
+        /// This method sets up the order entries for reference
+        /// </summary>
+        private void SetupOrderEntries()
+        {
+            decimal p = 1;
+            int id = 1;
+            while (p < orderEntryMaxPrice)
+            {
+                OrderEntry oe = new OrderEntry();
+                oe.Id = id;
+                oe.Price = TruncateDecimal(p, 2);
+                oe.Qty = TruncateDecimal((buySizeUSD / p), 6);
+                OrderEntries.Add(oe);
+                p = p * (1+stepPct);
+                id++;
             }
         }
 
-        private void RealizeLosses()
-        {
-            //todo: code this
-        }
 
-        private void PlaceBuyOrders(TradeBar bar, decimal? lowestBuyPrice = null)
+        private void PlaceOrder(decimal price, decimal qty)
         {
-            decimal nextBuyPrice;
-            if (!lowestBuyPrice.HasValue)
-            {
-                nextBuyPrice = bar.Close * stepDownPct;
-            }
-            else
-            {
-                nextBuyPrice = lowestBuyPrice.Value * stepDownPct;
-            }
-
-            bool buyOrdersDone = false;
-            while (!buyOrdersDone)
-            {
-                if (nextBuyPrice >= (bar.Close * seedDepthPct))
-                {
-                    PlaceBuy(TruncateDecimal(nextBuyPrice,2));
-                    
-                }
-                else
-                {
-                    buyOrdersDone = true;
-                }
-                nextBuyPrice = nextBuyPrice * stepDownPct;
-            }
-        }
-        
-
-        private void PlaceBuy(decimal buyPrice)
-        {
-            //Debug("Trigger buy " + Time.ToString("u") + " " + bar);
-            decimal qty = decimal.Divide(buySizeUSD, buyPrice);
-            var newTicket = LimitOrder(symbol, qty, buyPrice);
-            openLimitOrders.Add(newTicket);
-        }
-
-        private void PlaceSell(decimal sellPrice, decimal qty)
-        {
-            //Debug("Trigger sell " + Time.ToString("u") + " " + bar);
-            var newTicket = LimitOrder(symbol, qty, sellPrice);
+            var newTicket = LimitOrder(symbol, qty, price);
             openLimitOrders.Add(newTicket);
         }
 
