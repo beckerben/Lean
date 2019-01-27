@@ -31,7 +31,7 @@ namespace QuantConnect.Algorithm.Becker
         const string symbolName = "ETHUSD";
         private decimal realizeLossPct = 0.990m;  //not implemented, will be the sell order bail threshold
         private decimal buySizeUSD = 20; //the position size in USD
-        private int sellSteps = 4; //the number of steps in the orderbook to go up to place a sell
+        private int sellSteps = 6; //the number of steps in the orderbook to go up to place a sell
         private int buySteps = 2;  //the number of steps in the order book to place buys
         private decimal seedDepthPct = 0.80m;//the percentage down from the current tick to have buy orders
         private Symbol symbol = QuantConnect.Symbol.Create(symbolName, SecurityType.Crypto, Market.GDAX);
@@ -66,6 +66,7 @@ namespace QuantConnect.Algorithm.Becker
             {
                 Debug(Time + " OnData " + data.Bars[symbol].Close.ToString());
                 CheckBuyDepth(data.Bars[symbol]);
+                Plot("Trade Plot", "Price", data.Bars[symbol].Close);
                 //todo: code realizelosses to close out unrealized losses after some % loss or age?
                 //RealizeLosses();
             }
@@ -84,13 +85,13 @@ namespace QuantConnect.Algorithm.Becker
 
             if (orderEvent.Status == OrderStatus.Filled)
             {
-                Debug(Time + " " + orderEvent.Direction + " Filled: " + orderEvent + " ---- Transaction ---- " + Transactions.GetOrderById(orderEvent.OrderId));
+                Debug(Time + " " + orderEvent.Direction + " Filled: Tag " + Transactions.GetOrderById(orderEvent.OrderId).Tag + " " + orderEvent + " ---- Transaction ---- " + Transactions.GetOrderById(orderEvent.OrderId));
                 //place the opposite order
                 if (orderEvent.Direction == OrderDirection.Buy) 
                 {
                     
                     var buyEntry = OrderEntries.Where(x => x.Id == Convert.ToInt32(Transactions.GetOrderById(orderEvent.OrderId).Tag)).FirstOrDefault();
-                    var sellEntry = OrderEntries.Where(x => x.Id == buyEntry.Id + buySteps).FirstOrDefault();
+                    var sellEntry = OrderEntries.Where(x => x.Id == buyEntry.Id + sellSteps).FirstOrDefault();
                     if (sellEntry != null)
                     {
                         PlaceOrder(sellEntry.Price,-1*orderEvent.AbsoluteFillQuantity,sellEntry.Id.ToString());
@@ -143,16 +144,25 @@ namespace QuantConnect.Algorithm.Becker
                     .OrderBy(x => x.Price)
                     .FirstOrDefault();
 
-            //place the buys
+            //place the lower buys
             while (nextLowestBuyEntry.Id >= seedDepthEntry.Id)
             {
-                PlaceOrder(nextLowestBuyEntry.Price, nextLowestBuyEntry.Qty, nextLowestBuyEntry.Id.ToString());
+                var openSellOrder = Transactions.GetOpenOrders(x => Convert.ToInt32(x.Tag) == (nextHighestBuyEntry.Id + sellSteps) && x.Direction == OrderDirection.Sell && x.Type == OrderType.Limit).FirstOrDefault();
+                if (openSellOrder == null)
+                {
+                    PlaceOrder(nextLowestBuyEntry.Price, nextLowestBuyEntry.Qty, nextLowestBuyEntry.Id.ToString());
+                }
                 nextLowestBuyEntry = OrderEntries.Where(x => x.Id == (nextLowestBuyEntry.Id - buySteps)).FirstOrDefault();
             }
             
+            //place the higher buys
             while (nextHighestBuyEntry.Price < bar.Price)
             {
-                PlaceOrder(nextHighestBuyEntry.Price, nextHighestBuyEntry.Qty, nextHighestBuyEntry.Id.ToString());
+                var openSellOrder = Transactions.GetOpenOrders(x => Convert.ToInt32(x.Tag) == (nextHighestBuyEntry.Id + sellSteps) && x.Direction == OrderDirection.Sell && x.Type == OrderType.Limit).FirstOrDefault();
+                if (openSellOrder == null)
+                {
+                    PlaceOrder(nextHighestBuyEntry.Price, nextHighestBuyEntry.Qty, nextHighestBuyEntry.Id.ToString());
+                }
                 nextHighestBuyEntry = OrderEntries.Where(x => x.Id == (nextHighestBuyEntry.Id + buySteps)).FirstOrDefault();
             }
 
