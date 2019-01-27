@@ -11,14 +11,9 @@ using QuantConnect.Orders;
 
 namespace QuantConnect.Algorithm.Becker
 {
-    class OrderEntry
-    {
-        public int Id { get; set; }
-        public decimal Price { get; set; }
-        public decimal Qty { get; set; }
-    }
+ 
 
-    public class Quant03 : QCAlgorithm, IRegressionAlgorithmDefinition
+    public class LSSRSI : QCAlgorithm, IRegressionAlgorithmDefinition
     {
 
         #region "constants and variables"

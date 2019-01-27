@@ -46,7 +46,9 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="LSS01.cs" />
+    <Compile Include="LSSRSI.cs" />
+    <Compile Include="LSS.cs" />
+    <Compile Include="OrderEntry.cs" />
     <Compile Include="RSILowPct.cs" />
     <Compile Include="RSILowHigh.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
