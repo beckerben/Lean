@@ -10,7 +10,7 @@ using QuantConnect.Orders;
 
 namespace QuantConnect.Algorithm.Becker
 {
-    public class Quant01 : QCAlgorithm, IRegressionAlgorithmDefinition
+    public class RSILowHigh : QCAlgorithm, IRegressionAlgorithmDefinition
     {
 
         //constants for configuraing bot
