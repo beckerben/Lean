@@ -46,7 +46,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="Quant03.cs" />
+    <Compile Include="LSS01.cs" />
     <Compile Include="Quant02.cs" />
     <Compile Include="Quant01.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
