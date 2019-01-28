@@ -25,13 +25,24 @@ namespace QuantConnect.Algorithm.Becker
         //variables for trading
         const string symbolName = "ETHUSD";
         private decimal realizeLossPct = 0.990m;  //not implemented, will be the sell order bail threshold
-        private decimal buySizeUSD = 20; //the position size in USD
-        private int sellSteps = 6; //the number of steps in the orderbook to go up to place a sell
+        private decimal buySizeUSD = 25; //the position size in USD
+        private int sellSteps = 20; //the number of steps in the orderbook to go up to place a sell
         private int buySteps = 2;  //the number of steps in the order book to place buys
-        private decimal seedDepthPct = 0.80m;//the percentage down from the current tick to have buy orders
+        private decimal seedDepthPct = 0.90m;//the percentage down from the current tick to have buy orders
         private Symbol symbol = QuantConnect.Symbol.Create(symbolName, SecurityType.Crypto, Market.GDAX);
         private readonly List<OrderTicket> openLimitOrders = new List<OrderTicket>();
         private List<OrderEntry> OrderEntries = new List<OrderEntry>();
+
+        const double rsiLow = 20;
+        const double rsiLowReset = 50;
+        const int rsiPeriods = 10;
+        const int consolidatorMinutes = 3;
+
+        //variables for signals
+        private static RelativeStrengthIndex _rsi;
+        private bool buyCocked = false;
+        private bool buyFired = false;
+        
         #endregion
 
         #region "events"
@@ -47,30 +58,22 @@ namespace QuantConnect.Algorithm.Becker
             DefaultOrderProperties = new GDAXOrderProperties { PostOnly = true };
             AddCrypto(symbolName, Resolution.Minute);
 
-            SetupOrderEntries();
+            //setup the consolidator
+            var consolidator = new TradeBarConsolidator(TimeSpan.FromMinutes(consolidatorMinutes));
+            consolidator.DataConsolidated += OnConsolidated;
+            SubscriptionManager.AddConsolidator(symbol, consolidator);
 
+            //define the RSI indicator
+            _rsi = new RelativeStrengthIndex(rsiPeriods, MovingAverageType.Simple);
+
+            SetupOrderEntries();
         }
 
-		/// <summary>
-        /// OnData event is the primary entry point for your algorithm. Each new data point will be pumped in here.
-        /// </summary>
-        /// <param name="data">Slice object keyed by symbol containing the stock data</param>
         public override void OnData(Slice data)
         {
-            if (data.Bars[symbol].Close > 0)
-            {
-                Debug(Time + " OnData " + data.Bars[symbol].Close.ToString());
-                CheckBuyDepth(data.Bars[symbol]);
-                Plot("Trade Plot", "Price", data.Bars[symbol].Close);
-                //todo: code realizelosses to close out unrealized losses after some % loss or age?
-                //RealizeLosses();
-            }
+
         }
 
-        /// <summary>
-        /// Order events are triggered on order status changes. There are many order events including non-fill messages.
-        /// </summary>
-        /// <param name="orderEvent">OrderEvent object with details about the order status</param>
         public override void OnOrderEvent(OrderEvent orderEvent)
         {
             //if (orderEvent.Status == OrderStatus.Canceled)
@@ -96,6 +99,22 @@ namespace QuantConnect.Algorithm.Becker
             }
         }
 
+        public void OnConsolidated(object sender, TradeBar bar)
+        {
+            if (bar.Close > 0)
+            { 
+                _rsi.Update(bar.EndTime, bar.Close);
+                SetSignals(bar);
+
+                if (buyCocked && !buyFired)
+                {
+                    buyFired = true;
+                    CancelOpenBuyOrders();
+                    CheckBuyDepth(bar);
+                }
+            }
+        }
+
         #endregion
 
         #region "helpers"
@@ -103,16 +122,24 @@ namespace QuantConnect.Algorithm.Becker
         private void CheckBuyDepth(TradeBar bar)
         {
             //make sure there are buy orders down to the limit
-            var lowestOpenBuy = Transactions.GetOpenOrders(x => x.Direction == OrderDirection.Buy && x.Type == OrderType.Limit)
+            var openOrders = Transactions.GetOpenOrders(x => x.Direction == OrderDirection.Buy && x.Type == OrderType.Limit && (x.Status != OrderStatus.CancelPending))
+                    .Where(x => x.Symbol == symbolName);
+
+            var lowestOpenBuy = (dynamic)null;
+            var highestOpenBuy = (dynamic)null;
+
+            if (openOrders.Count() > 0)
+            {
+                lowestOpenBuy = Transactions.GetOpenOrders(x => x.Direction == OrderDirection.Buy && x.Type == OrderType.Limit)
                     .Where(x => x.Symbol == symbolName)
                     .OrderBy(x => Convert.ToInt32(x.Tag))
                     .FirstOrDefault();
 
-            var highestOpenBuy = Transactions.GetOpenOrders(x => x.Direction == OrderDirection.Buy && x.Type == OrderType.Limit)
-                    .Where(x => x.Symbol == symbolName)
-                    .OrderByDescending(x => Convert.ToInt32(x.Tag))
-                    .FirstOrDefault();
-
+                highestOpenBuy = Transactions.GetOpenOrders(x => x.Direction == OrderDirection.Buy && x.Type == OrderType.Limit)
+                        .Where(x => x.Symbol == symbolName)
+                        .OrderByDescending(x => Convert.ToInt32(x.Tag))
+                        .FirstOrDefault();
+            }
 
             var lowestBuyEntry = (dynamic)null; 
             var highestBuyEntry = (dynamic)null;
@@ -142,7 +169,9 @@ namespace QuantConnect.Algorithm.Becker
             //place the lower buys
             while (nextLowestBuyEntry.Id >= seedDepthEntry.Id)
             {
-                var openSellOrder = Transactions.GetOpenOrders(x => Convert.ToInt32(x.Tag) == (nextHighestBuyEntry.Id + sellSteps) && x.Direction == OrderDirection.Sell && x.Type == OrderType.Limit).FirstOrDefault();
+                var openSellOrder = Transactions.GetOpenOrders(x => x.Direction == OrderDirection.Sell && x.Type == OrderType.Limit && (x.Status != OrderStatus.CancelPending))
+                    .Where(x => Convert.ToInt32(x.Tag) == (nextHighestBuyEntry.Id + sellSteps))
+                    .FirstOrDefault();
                 if (openSellOrder == null)
                 {
                     PlaceOrder(nextLowestBuyEntry.Price, nextLowestBuyEntry.Qty, nextLowestBuyEntry.Id.ToString());
@@ -153,16 +182,27 @@ namespace QuantConnect.Algorithm.Becker
             //place the higher buys
             while (nextHighestBuyEntry.Price < bar.Price)
             {
-                var openSellOrder = Transactions.GetOpenOrders(x => Convert.ToInt32(x.Tag) == (nextHighestBuyEntry.Id + sellSteps) && x.Direction == OrderDirection.Sell && x.Type == OrderType.Limit).FirstOrDefault();
+                var openSellOrder = Transactions.GetOpenOrders(x => x.Direction == OrderDirection.Sell && x.Type == OrderType.Limit && (x.Status != OrderStatus.CancelPending))
+                    .Where(x => Convert.ToInt32(x.Tag) == (nextHighestBuyEntry.Id + sellSteps))
+                    .FirstOrDefault();
                 if (openSellOrder == null)
                 {
                     PlaceOrder(nextHighestBuyEntry.Price, nextHighestBuyEntry.Qty, nextHighestBuyEntry.Id.ToString());
                 }
                 nextHighestBuyEntry = OrderEntries.Where(x => x.Id == (nextHighestBuyEntry.Id + buySteps)).FirstOrDefault();
             }
-
         }
+        
+        private void CancelOpenBuyOrders()
+        {
+            var ordersToCancel = Transactions.GetOpenOrders(x => x.Direction == OrderDirection.Buy && x.Type == OrderType.Limit && (x.Status != OrderStatus.CancelPending))
+                    .Where(x => x.Symbol == symbolName);
 
+            foreach (Order ord in ordersToCancel)
+            {
+                Transactions.CancelOrder(ord.Id);
+            }
+        }
 
         /// <summary>
         /// This method sets up the order entries for reference
@@ -183,6 +223,30 @@ namespace QuantConnect.Algorithm.Becker
             }
         }
 
+        private void SetSignals(TradeBar bar)
+        {
+            if (_rsi.IsReady)
+            {
+                var rsiValue = _rsi;
+                if (_rsi <= rsiLow)
+                {
+                    if (!buyCocked)
+                    {
+                        buyCocked = true;
+                    }
+                }
+                else
+                {
+                    if (_rsi >= rsiLowReset && buyCocked)
+                    {
+                        buyCocked = false;
+                        buyFired = false;
+                    }
+                }
+
+            }
+        }
+        
         private void PlaceOrder(decimal price, decimal qty, string tag)
         {
             string orderDirection;
