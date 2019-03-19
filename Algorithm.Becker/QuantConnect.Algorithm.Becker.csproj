@@ -46,6 +46,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="LSSLimit.cs" />
     <Compile Include="LSSRSI.cs" />
     <Compile Include="LSS.cs" />
     <Compile Include="Common\OrderEntry.cs" />
