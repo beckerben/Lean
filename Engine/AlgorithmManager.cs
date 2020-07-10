@@ -38,6 +38,7 @@ using QuantConnect.Securities;
 using QuantConnect.Util;
 using QuantConnect.Securities.Option;
 using QuantConnect.Securities.Volatility;
+using QuantConnect.Util.RateLimit;
 
 namespace QuantConnect.Lean.Engine
 {
@@ -46,80 +47,55 @@ namespace QuantConnect.Lean.Engine
     /// </summary>
     public class AlgorithmManager
     {
-        private DateTime _previousTime;
         private IAlgorithm _algorithm;
-        private readonly object _lock = new object();
-        private string _algorithmId = "";
-        private DateTime _currentTimeStepTime;
-        private readonly TimeSpan _timeLoopMaximum = TimeSpan.FromMinutes(Config.GetDouble("algorithm-manager-time-loop-maximum", 20));
-        private long _dataPointCount;
+        private readonly object _lock;
+        private readonly bool _liveMode;
 
         /// <summary>
         /// Publicly accessible algorithm status
         /// </summary>
-        public AlgorithmStatus State
-        {
-            get { return _algorithm == null ? AlgorithmStatus.Running : _algorithm.Status; }
-        }
+        public AlgorithmStatus State => _algorithm?.Status ?? AlgorithmStatus.Running;
 
         /// <summary>
         /// Public access to the currently running algorithm id.
         /// </summary>
-        public string AlgorithmId
-        {
-            get { return _algorithmId; }
-        }
+        public string AlgorithmId { get; private set; }
 
         /// <summary>
-        /// Gets the amount of time spent on the current time step
+        /// Provides the isolator with a function for verifying that we're not spending too much time in each
+        /// algorithm manager time loop
         /// </summary>
-        public TimeSpan CurrentTimeStepElapsed
-        {
-            get { return _currentTimeStepTime == DateTime.MinValue ? TimeSpan.Zero : DateTime.UtcNow - _currentTimeStepTime; }
-        }
-
-        /// <summary>
-        /// Gets a function used with the Isolator for verifying we're not spending too much time in each
-        /// algo manager timer loop
-        /// </summary>
-        public readonly Func<IsolatorLimitResult> TimeLoopWithinLimits;
-
-        private readonly bool _liveMode;
+        public AlgorithmTimeLimitManager TimeLimit { get; }
 
         /// <summary>
         /// Quit state flag for the running algorithm. When true the user has requested the backtest stops through a Quit() method.
         /// </summary>
         /// <seealso cref="QCAlgorithm.Quit(String)"/>
-        public bool QuitState
-        {
-            get { return State == AlgorithmStatus.Deleted; }
-        }
+        public bool QuitState => State == AlgorithmStatus.Deleted;
 
         /// <summary>
         /// Gets the number of data points processed per second
         /// </summary>
-        public long DataPoints
-        {
-            get { return _dataPointCount; }
-        }
+        public long DataPoints { get; private set; }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AlgorithmManager"/> class
         /// </summary>
         /// <param name="liveMode">True if we're running in live mode, false for backtest mode</param>
-        public AlgorithmManager(bool liveMode)
+        /// <param name="job">Provided by LEAN when creating a new algo manager. This is the job
+        /// that the algo manager is about to execute. Jupyter and other consumers can provide the
+        /// default value of null</param>
+        public AlgorithmManager(bool liveMode, AlgorithmNodePacket job = null)
         {
-            TimeLoopWithinLimits = () =>
-            {
-                var message = string.Empty;
-                if (CurrentTimeStepElapsed > _timeLoopMaximum)
-                {
-                    message = $"Algorithm took longer than {_timeLoopMaximum.TotalMinutes} minutes on a single time loop.";
-                }
-
-                return new IsolatorLimitResult(CurrentTimeStepElapsed, message);
-            };
+            AlgorithmId = "";
             _liveMode = liveMode;
+            _lock = new object();
+
+            // initialize the time limit manager
+            TimeLimit = new AlgorithmTimeLimitManager(
+                CreateTokenBucket(job?.Controls?.TrainingLimits),
+                TimeSpan.FromMinutes(Config.GetDouble("algorithm-manager-time-loop-maximum", 20))
+            );
         }
 
         /// <summary>
@@ -138,23 +114,23 @@ namespace QuantConnect.Lean.Engine
         public void Run(AlgorithmNodePacket job, IAlgorithm algorithm, ISynchronizer synchronizer, ITransactionHandler transactions, IResultHandler results, IRealTimeHandler realtime, ILeanManager leanManager, IAlphaHandler alphas, CancellationToken token)
         {
             //Initialize:
-            _dataPointCount = 0;
+            DataPoints = 0;
             _algorithm = algorithm;
-            var portfolioValue = algorithm.Portfolio.TotalPortfolioValue;
+
             var backtestMode = (job.Type == PacketType.BacktestNode);
             var methodInvokers = new Dictionary<Type, MethodInvoker>();
             var marginCallFrequency = TimeSpan.FromMinutes(5);
             var nextMarginCallTime = DateTime.MinValue;
             var settlementScanFrequency = TimeSpan.FromMinutes(30);
             var nextSettlementScanTime = DateTime.MinValue;
+            var time = algorithm.StartDate.Date;
 
             var delistings = new List<Delisting>();
             var splitWarnings = new List<Split>();
 
             //Initialize Properties:
-            _algorithmId = job.AlgorithmId;
+            AlgorithmId = job.AlgorithmId;
             _algorithm.Status = AlgorithmStatus.Running;
-            _previousTime = algorithm.StartDate.Date;
 
             //Create the method accessors to push generic types into algorithm: Find all OnData events:
 
@@ -170,11 +146,6 @@ namespace QuantConnect.Lean.Engine
             var hasOnDataDelistings = AddMethodInvoker<Delistings>(algorithm, methodInvokers);
             var hasOnDataSymbolChangedEvents = AddMethodInvoker<SymbolChangedEvents>(algorithm, methodInvokers);
 
-            // Algorithm 3.0 data accessors
-            var hasOnDataSlice = algorithm.GetType().GetMethods()
-                .Where(x => x.Name == "OnData" && x.GetParameters().Length == 1 && x.GetParameters()[0].ParameterType == typeof (Slice))
-                .FirstOrDefault(x => x.DeclaringType == algorithm.GetType()) != null;
-
             //Go through the subscription types and create invokers to trigger the event handlers for each custom type:
             foreach (var config in algorithm.SubscriptionManager.Subscriptions)
             {
@@ -187,13 +158,6 @@ namespace QuantConnect.Lean.Engine
                     //If we already have this Type-handler then don't add it to invokers again.
                     if (methodInvokers.ContainsKey(config.Type)) continue;
 
-                    //If we couldnt find the event handler, let the user know we can't fire that event.
-                    if (genericMethod == null && !hasOnDataSlice)
-                    {
-                        algorithm.RunTimeError = new Exception("Data event handler not found, please create a function matching this template: public void OnData(" + config.Type.Name + " data) {  }");
-                        _algorithm.Status = AlgorithmStatus.RuntimeError;
-                        return;
-                    }
                     if (genericMethod != null)
                     {
                         methodInvokers.Add(config.Type, genericMethod.DelegateForCallMethod());
@@ -206,79 +170,57 @@ namespace QuantConnect.Lean.Engine
             foreach (var timeSlice in Stream(algorithm, synchronizer, results, token))
             {
                 // reset our timer on each loop
-                _currentTimeStepTime = DateTime.UtcNow;
+                TimeLimit.StartNewTimeStep();
 
                 //Check this backtest is still running:
                 if (_algorithm.Status != AlgorithmStatus.Running)
                 {
-                    Log.Error(string.Format("AlgorithmManager.Run(): Algorithm state changed to {0} at {1}", _algorithm.Status, timeSlice.Time));
+                    Log.Error($"AlgorithmManager.Run(): Algorithm state changed to {_algorithm.Status} at {timeSlice.Time.ToStringInvariant()}");
                     break;
                 }
 
                 //Execute with TimeLimit Monitor:
                 if (token.IsCancellationRequested)
                 {
-                    Log.Error("AlgorithmManager.Run(): CancellationRequestion at " + timeSlice.Time);
+                    Log.Error($"AlgorithmManager.Run(): CancellationRequestion at {timeSlice.Time.ToStringInvariant()}");
                     return;
                 }
 
                 // Update the ILeanManager
                 leanManager.Update();
 
-                var time = timeSlice.Time;
-                _dataPointCount += timeSlice.DataPointCount;
+                time = timeSlice.Time;
+                DataPoints += timeSlice.DataPointCount;
 
-                //If we're in backtest mode we need to capture the daily performance. We do this here directly
-                //before updating the algorithm state with the new data from this time step, otherwise we'll
-                //produce incorrect samples (they'll take into account this time step's new price values)
+                // We need to sample at the top of the loop in case we have a strategy
+                // with no data added. Time pulses would be emitted between days, and
+                // would cause us to skip sampling of the portfolio in those dead days.
+                results.Sample(time);
+
                 if (backtestMode)
                 {
-                    //On day-change sample equity and daily performance for statistics calculations
-                    if (_previousTime.Date != time.Date)
+                    if (algorithm.Portfolio.TotalPortfolioValue <= 0)
                     {
-                        SampleBenchmark(algorithm, results, _previousTime.Date);
-
-                        //Sample the portfolio value over time for chart.
-                        results.SampleEquity(_previousTime, Math.Round(algorithm.Portfolio.TotalPortfolioValue, 4));
-
-                        //Check for divide by zero
-                        if (portfolioValue == 0m)
-                        {
-                            results.SamplePerformance(_previousTime.Date, 0);
-                        }
-                        else
-                        {
-                            results.SamplePerformance(_previousTime.Date, Math.Round((algorithm.Portfolio.TotalPortfolioValue - portfolioValue) * 100 / portfolioValue, 10));
-                        }
-                        portfolioValue = algorithm.Portfolio.TotalPortfolioValue;
-                    }
-
-                    if (portfolioValue <= 0)
-                    {
-                        string logMessage = "AlgorithmManager.Run(): Portfolio value is less than or equal to zero";
-                        Log.Trace(logMessage);
+                        var logMessage = "AlgorithmManager.Run(): Portfolio value is less than or equal to zero, stopping algorithm.";
+                        Log.Error(logMessage);
                         results.SystemDebugMessage(logMessage);
                         break;
                     }
-                }
-                else
-                {
-                    // live mode continously sample the benchmark
-                    SampleBenchmark(algorithm, results, time);
-                }
 
-                //Update algorithm state after capturing performance from previous day
-
-                // If backtesting, we need to check if there are realtime events in the past
-                // which didn't fire because at the scheduled times there was no data (i.e. markets closed)
-                // and fire them with the correct date/time.
-                if (backtestMode)
-                {
+                    // If backtesting, we need to check if there are realtime events in the past
+                    // which didn't fire because at the scheduled times there was no data (i.e. markets closed)
+                    // and fire them with the correct date/time.
                     realtime.ScanPastEvents(time);
                 }
 
                 //Set the algorithm and real time handler's time
                 algorithm.SetDateTime(time);
+
+                // the time pulse are just to advance algorithm time, lets shortcut the loop here
+                if (timeSlice.IsTimePulse)
+                {
+                    continue;
+                }
 
                 // Update the current slice before firing scheduled events or any other task
                 algorithm.SetCurrentSlice(timeSlice.Slice);
@@ -304,11 +246,8 @@ namespace QuantConnect.Lean.Engine
                     foreach (var security in timeSlice.SecurityChanges.AddedSecurities)
                     {
                         security.IsTradable = true;
-                        if (!algorithm.Securities.ContainsKey(security.Symbol))
-                        {
-                            // add the new security
-                            algorithm.Securities.Add(security);
-                        }
+                        // uses TryAdd, so don't need to worry about duplicates here
+                        algorithm.Securities.Add(security);
                     }
 
                     var activeSecurities = algorithm.UniverseManager.ActiveSecurities;
@@ -319,19 +258,22 @@ namespace QuantConnect.Lean.Engine
                             security.IsTradable = false;
                         }
                     }
+
+                    realtime.OnSecuritiesChanged(timeSlice.SecurityChanges);
                 }
 
                 //Update the securities properties: first before calling user code to avoid issues with data
                 foreach (var update in timeSlice.SecuritiesUpdateData)
                 {
                     var security = update.Target;
-                    foreach (var data in update.Data)
-                    {
-                        security.SetMarketPrice(data);
-                    }
 
-                    // Send market price updates to the TradeBuilder
-                    algorithm.TradeBuilder.SetMarketPrice(security.Symbol, security.Price);
+                    security.Update(update.Data, update.DataType, update.ContainsFillForwardData);
+
+                    if (!update.IsInternalConfig)
+                    {
+                        // Send market price updates to the TradeBuilder
+                        algorithm.TradeBuilder.SetMarketPrice(security.Symbol, security.Price);
+                    }
                 }
 
                 //Update the securities properties with any universe data
@@ -344,7 +286,7 @@ namespace QuantConnect.Lean.Engine
                             Security security;
                             if (algorithm.Securities.TryGetValue(data.Symbol, out security))
                             {
-                                security.Cache.StoreData(data);
+                                security.Cache.StoreData(new[] {data}, data.GetType());
                             }
                         }
                     }
@@ -360,9 +302,8 @@ namespace QuantConnect.Lean.Engine
                         cash.Update(updateData);
                     }
                 }
-
-                // sample alpha charts now that we've updated time/price information but BEFORE we receive new insights
-                alphas.ProcessSynchronousEvents();
+                // security prices got updated
+                algorithm.Portfolio.InvalidateTotalPortfolioValue();
 
                 // fire real time events after we've updated based on the new data
                 realtime.SetTime(timeSlice.Time);
@@ -385,7 +326,7 @@ namespace QuantConnect.Lean.Engine
                 if (algorithm.RunTimeError != null)
                 {
                     _algorithm.Status = AlgorithmStatus.RuntimeError;
-                    Log.Trace(string.Format("AlgorithmManager.Run(): Algorithm encountered a runtime error at {0}. Error: {1}", timeSlice.Time, algorithm.RunTimeError));
+                    Log.Trace($"AlgorithmManager.Run(): Algorithm encountered a runtime error at {timeSlice.Time.ToStringInvariant()}. Error: {algorithm.RunTimeError}");
                     break;
                 }
 
@@ -409,7 +350,9 @@ namespace QuantConnect.Lean.Engine
                             var executedTickets = algorithm.Portfolio.MarginCallModel.ExecuteMarginCall(marginCallOrders);
                             foreach (var ticket in executedTickets)
                             {
-                                algorithm.Error(string.Format("{0} - Executed MarginCallOrder: {1} - Quantity: {2} @ {3}", algorithm.Time, ticket.Symbol, ticket.Quantity, ticket.AverageFillPrice));
+                                algorithm.Error($"{algorithm.Time.ToStringInvariant()} - Executed MarginCallOrder: {ticket.Symbol} - " +
+                                    $"Quantity: {ticket.Quantity.ToStringInvariant()} @ {ticket.AverageFillPrice.ToStringInvariant()}"
+                                );
                             }
                         }
                         catch (Exception err)
@@ -417,7 +360,7 @@ namespace QuantConnect.Lean.Engine
                             algorithm.RunTimeError = err;
                             _algorithm.Status = AlgorithmStatus.RuntimeError;
                             var locator = executingMarginCall ? "Portfolio.MarginCallModel.ExecuteMarginCall" : "OnMarginCall";
-                            Log.Error(string.Format("AlgorithmManager.Run(): RuntimeError: {0}: ", locator) + err);
+                            Log.Error($"AlgorithmManager.Run(): RuntimeError: {locator}: {err}");
                             return;
                         }
                     }
@@ -453,8 +396,14 @@ namespace QuantConnect.Lean.Engine
                 {
                     try
                     {
-                        algorithm.OnSecuritiesChanged(timeSlice.SecurityChanges);
-                        algorithm.OnFrameworkSecuritiesChanged(timeSlice.SecurityChanges);
+                        var algorithmSecurityChanges = new SecurityChanges(timeSlice.SecurityChanges)
+                        {
+                            // by default for user code we want to filter out custom securities
+                            FilterCustomSecurities = true
+                        };
+
+                        algorithm.OnSecuritiesChanged(algorithmSecurityChanges);
+                        algorithm.OnFrameworkSecuritiesChanged(algorithmSecurityChanges);
                     }
                     catch (Exception err)
                     {
@@ -544,23 +493,26 @@ namespace QuantConnect.Lean.Engine
                 //Update registered consolidators for this symbol index
                 try
                 {
-                    foreach (var update in timeSlice.ConsolidatorUpdateData)
+                    if (timeSlice.ConsolidatorUpdateData.Count > 0)
                     {
-                        var consolidators = update.Target.Consolidators;
-                        foreach (var consolidator in consolidators)
+                        var timeKeeper = algorithm.TimeKeeper;
+                        foreach (var update in timeSlice.ConsolidatorUpdateData)
                         {
-                            foreach (var dataPoint in update.Data)
+                            var consolidators = update.Target.Consolidators;
+                            foreach (var consolidator in consolidators)
                             {
-                                // only push data into consolidators on the native, subscribed to resolution
-                                if (EndTimeIsInNativeResolution(update.Target, dataPoint.EndTime))
+                                foreach (var dataPoint in update.Data)
                                 {
-                                    consolidator.Update(dataPoint);
+                                    // only push data into consolidators on the native, subscribed to resolution
+                                    if (EndTimeIsInNativeResolution(update.Target, dataPoint.EndTime))
+                                    {
+                                        consolidator.Update(dataPoint);
+                                    }
                                 }
-                            }
 
-                            // scan for time after we've pumped all the data through for this consolidator
-                            var localTime = time.ConvertFromUtc(update.Target.ExchangeTimeZone);
-                            consolidator.Scan(localTime);
+                                // scan for time after we've pumped all the data through for this consolidator
+                                consolidator.Scan(timeKeeper.GetLocalTimeKeeper(update.Target.ExchangeTimeZone).LocalTime);
+                            }
                         }
                     }
                 }
@@ -679,8 +631,9 @@ namespace QuantConnect.Lean.Engine
                 // Manually trigger the event handler to prevent thread switch.
                 transactions.ProcessSynchronousEvents();
 
-                //Save the previous time for the sample calculations
-                _previousTime = time;
+                // sample alpha charts now that we've updated time/price information and after transactions
+                // are processed so that insights closed because of new order based insights get updated
+                alphas.ProcessSynchronousEvents();
 
                 // send the alpha statistics to the result handler for storage/transmit with the result packets
                 results.SetAlphaRuntimeStatistics(alphas.RuntimeStatistics);
@@ -694,7 +647,7 @@ namespace QuantConnect.Lean.Engine
             } // End of ForEach feed.Bridge.GetConsumingEnumerable
 
             // stop timing the loops
-            _currentTimeStepTime = DateTime.MinValue;
+            TimeLimit.StopEnforcingTimeLimit();
 
             //Stream over:: Send the final packet and fire final events:
             Log.Trace("AlgorithmManager.Run(): Firing On End Of Algorithm...");
@@ -749,20 +702,8 @@ namespace QuantConnect.Lean.Engine
             SetStatus(AlgorithmStatus.Completed);
 
             //Take final samples:
-            results.SampleRange(algorithm.GetChartUpdates());
-            results.SampleEquity(_previousTime, Math.Round(algorithm.Portfolio.TotalPortfolioValue, 4));
-            SampleBenchmark(algorithm, results, backtestMode ? _previousTime.Date : _previousTime);
+            results.Sample(time, force: true);
 
-            //Check for divide by zero
-            if (portfolioValue == 0m)
-            {
-                results.SamplePerformance(backtestMode ? _previousTime.Date : _previousTime, 0m);
-            }
-            else
-            {
-                results.SamplePerformance(backtestMode ? _previousTime.Date : _previousTime,
-                    Math.Round((algorithm.Portfolio.TotalPortfolioValue - portfolioValue) * 100 / portfolioValue, 10));
-            }
         } // End of Run();
 
         /// <summary>
@@ -856,28 +797,27 @@ namespace QuantConnect.Lean.Engine
                             var data = slice[symbol];
                             var list = new List<BaseData>();
                             Type dataType;
-                            SubscriptionDataConfig config;
 
                             var ticks = data as List<Tick>;
                             if (ticks != null)
                             {
                                 list.AddRange(ticks);
                                 dataType = typeof(Tick);
-                                config = algorithm.SubscriptionManager.Subscriptions.FirstOrDefault(
-                                    subscription => subscription.Symbol == symbol && dataType.IsAssignableFrom(subscription.Type));
                             }
                             else
                             {
                                 list.Add(data);
                                 dataType = data.GetType();
-                                config = security.Subscriptions.FirstOrDefault(subscription => dataType.IsAssignableFrom(subscription.Type));
                             }
+
+                            var config = algorithm.SubscriptionManager.SubscriptionDataConfigService
+                                .GetSubscriptionDataConfigs(symbol, includeInternalConfigs: true)
+                                .FirstOrDefault(subscription => dataType.IsAssignableFrom(subscription.Type));
 
                             if (config == null)
                             {
                                 throw new Exception($"A data subscription for type '{dataType.Name}' was not found.");
                             }
-
                             paired.Add(new DataFeedPacket(security, config, list));
                         }
 
@@ -895,7 +835,6 @@ namespace QuantConnect.Lean.Engine
                         if (!setStartTime)
                         {
                             setStartTime = true;
-                            _previousTime = timeSlice.Time;
                             algorithm.Debug("Algorithm warming up...");
                         }
                         if (DateTime.UtcNow > nextStatusTime)
@@ -925,13 +864,13 @@ namespace QuantConnect.Lean.Engine
 
             foreach (var timeSlice in synchronizer.StreamData(cancellationToken))
             {
-                if (!setStartTime)
-                {
-                    setStartTime = true;
-                    _previousTime = timeSlice.Time;
-                }
                 if (algorithm.LiveMode && algorithm.IsWarmingUp)
                 {
+                    if (timeSlice.IsTimePulse)
+                    {
+                        continue;
+                    }
+
                     // this is hand-over logic, we spin up the data feed first and then request
                     // the history for warmup, so there will be some overlap between the data
                     if (lastHistoryTimeUtc.HasValue)
@@ -1037,7 +976,6 @@ namespace QuantConnect.Lean.Engine
             return false;
         }
 
-
         /// <summary>
         /// Performs delisting logic for the securities specified in <paramref name="newDelistings"/> that are marked as <see cref="DelistingType.Delisted"/>.
         /// </summary>
@@ -1136,17 +1074,17 @@ namespace QuantConnect.Lean.Engine
         /// <summary>
         /// Keeps track of split warnings so we can later liquidate option contracts
         /// </summary>
-        private static void HandleSplitSymbols(Splits newSplits, List<Split> splitWarnings)
+        private void HandleSplitSymbols(Splits newSplits, List<Split> splitWarnings)
         {
             foreach (var split in newSplits.Values)
             {
                 if (split.Type != SplitType.Warning)
                 {
-                    Log.Trace($"AlgorithmManager.Run() Security split occurred: Split Factor: {split} Reference Price: {split.ReferencePrice}");
+                    Log.Trace($"AlgorithmManager.HandleSplitSymbols(): {_algorithm.Time} - Security split occurred: Split Factor: {split} Reference Price: {split.ReferencePrice}");
                     continue;
                 }
 
-                Log.Trace($"AlgorithmManager.Run() Security split warning: {split}");
+                Log.Trace($"AlgorithmManager.HandleSplitSymbols(): {_algorithm.Time} - Security split warning: {split}");
 
                 if (!splitWarnings.Any(x => x.Symbol == split.Symbol && x.Type == SplitType.Warning))
                 {
@@ -1158,7 +1096,7 @@ namespace QuantConnect.Lean.Engine
         /// <summary>
         /// Liquidate option contact holdings who's underlying security has split
         /// </summary>
-        private static void ProcessSplitSymbols(IAlgorithm algorithm, List<Split> splitWarnings)
+        private void ProcessSplitSymbols(IAlgorithm algorithm, List<Split> splitWarnings)
         {
             // NOTE: This method assumes option contracts have the same core trading hours as their underlying contract
             //       This is a small performance optimization to prevent scanning every contract on every time step,
@@ -1169,11 +1107,34 @@ namespace QuantConnect.Lean.Engine
                 var split = splitWarnings[i];
                 var security = algorithm.Securities[split.Symbol];
 
+                if (!security.IsTradable
+                    && !algorithm.UniverseManager.ActiveSecurities.Keys.Contains(split.Symbol))
+                {
+                    Log.Debug($"AlgorithmManager.ProcessSplitSymbols(): {_algorithm.Time} - Removing split warning for {security.Symbol}");
+
+                    // remove the warning from out list
+                    splitWarnings.RemoveAt(i);
+                    // Since we are storing the split warnings for a loop
+                    // we need to check if the security was removed.
+                    // When removed, it will be marked as non tradable but just in case
+                    // we expect it not to be an active security either
+                    continue;
+                }
+
                 var nextMarketClose = security.Exchange.Hours.GetNextMarketClose(security.LocalTime, false);
 
                 // determine the latest possible time we can submit a MOC order
                 var configs = algorithm.SubscriptionManager.SubscriptionDataConfigService
                     .GetSubscriptionDataConfigs(security.Symbol);
+
+                if (configs.Count == 0)
+                {
+                    // should never happen at this point, if it does let's give some extra info
+                    throw new Exception(
+                        $"AlgorithmManager.ProcessSplitSymbols(): {_algorithm.Time} - No subscriptions found for {security.Symbol}" +
+                        $", IsTradable: {security.IsTradable}" +
+                        $", Active: {algorithm.UniverseManager.ActiveSecurities.Keys.Contains(split.Symbol)}");
+                }
 
                 var latestMarketOnCloseTimeRoundedDownByResolution = nextMarketClose.Subtract(MarketOnCloseOrder.DefaultSubmissionTimeBuffer)
                     .RoundDownInTimeZone(configs.GetHighestResolution().ToTimeSpan(), security.Exchange.TimeZone, configs.First().DataTimeZone);
@@ -1218,35 +1179,53 @@ namespace QuantConnect.Lean.Engine
         }
 
         /// <summary>
-        /// Samples the benchmark in a  try/catch block
-        /// </summary>
-        private void SampleBenchmark(IAlgorithm algorithm, IResultHandler results, DateTime time)
-        {
-            try
-            {
-                // backtest mode, sample benchmark on day changes
-                results.SampleBenchmark(time, algorithm.Benchmark.Evaluate(time).SmartRounding());
-            }
-            catch (Exception err)
-            {
-                algorithm.RunTimeError = err;
-                _algorithm.Status = AlgorithmStatus.RuntimeError;
-                Log.Error(err);
-            }
-        }
-
-        /// <summary>
         /// Determines if a data point is in it's native, configured resolution
         /// </summary>
         private static bool EndTimeIsInNativeResolution(SubscriptionDataConfig config, DateTime dataPointEndTime)
         {
-            if (config.Increment == TimeSpan.Zero)
+            if (config.Resolution == Resolution.Tick
+                ||
+                // time zones don't change seconds or milliseconds so we can
+                // shortcut timezone conversions
+                (config.Resolution == Resolution.Second
+                || config.Resolution == Resolution.Minute)
+                && dataPointEndTime.Ticks % config.Increment.Ticks == 0)
             {
                 return true;
             }
 
             var roundedDataPointEndTime = dataPointEndTime.RoundDownInTimeZone(config.Increment, config.ExchangeTimeZone, config.DataTimeZone);
             return dataPointEndTime == roundedDataPointEndTime;
+        }
+
+        /// <summary>
+        /// Constructs the correct <see cref="ITokenBucket"/> instance per the provided controls.
+        /// The provided controls will be null when
+        /// </summary>
+        private static ITokenBucket CreateTokenBucket(LeakyBucketControlParameters controls)
+        {
+            if (controls == null)
+            {
+                // this will only be null when the AlgorithmManager is being initialized outside of LEAN
+                // for example, in unit tests that don't provide a job package as well as from Jupyter
+                // in each of the above cases, it seems best to not enforce the leaky bucket restrictions
+                return TokenBucket.Null;
+            }
+
+            Log.Trace("AlgorithmManager.CreateTokenBucket(): Initializing LeakyBucket: " +
+                $"Capacity: {controls.Capacity} " +
+                $"RefillAmount: {controls.RefillAmount} " +
+                $"TimeInterval: {controls.TimeIntervalMinutes}"
+            );
+
+            // these parameters view 'minutes' as the resource being rate limited. the capacity is the total
+            // number of minutes available for burst operations and after controls.TimeIntervalMinutes time
+            // has passed, we'll add controls.RefillAmount to the 'minutes' available, maxing at controls.Capacity
+            return new LeakyBucket(
+                controls.Capacity,
+                controls.RefillAmount,
+                TimeSpan.FromMinutes(controls.TimeIntervalMinutes)
+            );
         }
     }
 }

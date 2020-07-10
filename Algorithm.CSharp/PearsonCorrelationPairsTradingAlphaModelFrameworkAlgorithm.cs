@@ -13,7 +13,6 @@
  * limitations under the License.
 */
 
-using QuantConnect.Algorithm.Framework;
 using QuantConnect.Algorithm.Framework.Alphas;
 using QuantConnect.Algorithm.Framework.Execution;
 using QuantConnect.Algorithm.Framework.Portfolio;
@@ -29,7 +28,7 @@ namespace QuantConnect.Algorithm.CSharp
     /// This model extendes <see cref="BasePairsTradingAlphaModel"/> and uses Pearson correlation
     /// to rank the pairs trading candidates and use the best candidate to trade.
     /// </summary>
-    public class PearsonCorrelationPairsTradingAlphaModelFrameworkAlgorithm : QCAlgorithmFramework, IRegressionAlgorithmDefinition
+    public class PearsonCorrelationPairsTradingAlphaModelFrameworkAlgorithm : QCAlgorithm, IRegressionAlgorithmDefinition
     {
         public override void Initialize()
         {
@@ -70,18 +69,25 @@ namespace QuantConnect.Algorithm.CSharp
             {"Drawdown", "0.700%"},
             {"Expectancy", "0.548"},
             {"Net Profit", "0.497%"},
-            {"Sharpe Ratio", "8.022"},
+            {"Sharpe Ratio", "9.052"},
+            {"Probabilistic Sharpe Ratio", "85.509%"},
             {"Loss Rate", "50%"},
             {"Win Rate", "50%"},
             {"Profit-Loss Ratio", "2.10"},
-            {"Alpha", "0"},
-            {"Beta", "22.675"},
-            {"Annual Standard Deviation", "0.031"},
+            {"Alpha", "0.244"},
+            {"Beta", "0.064"},
+            {"Annual Standard Deviation", "0.035"},
             {"Annual Variance", "0.001"},
-            {"Information Ratio", "7.695"},
-            {"Tracking Error", "0.031"},
-            {"Treynor Ratio", "0.011"},
+            {"Information Ratio", "-3.594"},
+            {"Tracking Error", "0.208"},
+            {"Treynor Ratio", "4.854"},
             {"Total Fees", "$23.83"},
+            {"Fitness Score", "0.752"},
+            {"Kelly Criterion Estimate", "0"},
+            {"Kelly Criterion Probability Value", "0"},
+            {"Sortino Ratio", "79228162514264337593543950335"},
+            {"Return Over Maximum Drawdown", "161.648"},
+            {"Portfolio Turnover", "0.752"},
             {"Total Insights Generated", "4"},
             {"Total Insights Closed", "0"},
             {"Total Insights Analysis Completed", "0"},

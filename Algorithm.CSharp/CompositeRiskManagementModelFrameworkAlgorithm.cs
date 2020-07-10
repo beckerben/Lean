@@ -14,7 +14,6 @@
 */
 
 using System.Collections.Generic;
-using QuantConnect.Algorithm.Framework;
 using QuantConnect.Algorithm.Framework.Alphas;
 using QuantConnect.Algorithm.Framework.Execution;
 using QuantConnect.Algorithm.Framework.Portfolio;
@@ -27,7 +26,7 @@ namespace QuantConnect.Algorithm.CSharp
     /// <summary>
     /// Show cases how to use the <see cref="CompositeRiskManagementModel"/> to define
     /// </summary>
-    public class CompositeRiskManagementModelFrameworkAlgorithm : QCAlgorithmFramework, IRegressionAlgorithmDefinition
+    public class CompositeRiskManagementModelFrameworkAlgorithm : QCAlgorithm, IRegressionAlgorithmDefinition
     {
         public override void Initialize()
         {
@@ -73,18 +72,25 @@ namespace QuantConnect.Algorithm.CSharp
             {"Drawdown", "2.300%"},
             {"Expectancy", "0.314"},
             {"Net Profit", "1.372%"},
-            {"Sharpe Ratio", "3.771"},
+            {"Sharpe Ratio", "4.11"},
+            {"Probabilistic Sharpe Ratio", "63.578%"},
             {"Loss Rate", "33%"},
             {"Win Rate", "67%"},
             {"Profit-Loss Ratio", "0.97"},
-            {"Alpha", "0.007"},
-            {"Beta", "62.953"},
-            {"Annual Standard Deviation", "0.186"},
-            {"Annual Variance", "0.035"},
-            {"Information Ratio", "3.713"},
-            {"Tracking Error", "0.186"},
-            {"Treynor Ratio", "0.011"},
+            {"Alpha", "-0.152"},
+            {"Beta", "0.968"},
+            {"Annual Standard Deviation", "0.213"},
+            {"Annual Variance", "0.045"},
+            {"Information Ratio", "-18.565"},
+            {"Tracking Error", "0.01"},
+            {"Treynor Ratio", "0.905"},
             {"Total Fees", "$22.77"},
+            {"Fitness Score", "0.999"},
+            {"Kelly Criterion Estimate", "39.573"},
+            {"Kelly Criterion Probability Value", "0.226"},
+            {"Sortino Ratio", "79228162514264337593543950335"},
+            {"Return Over Maximum Drawdown", "60.075"},
+            {"Portfolio Turnover", "1.242"},
             {"Total Insights Generated", "100"},
             {"Total Insights Closed", "99"},
             {"Total Insights Analysis Completed", "99"},

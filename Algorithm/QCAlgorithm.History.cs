@@ -489,12 +489,12 @@ namespace QuantConnect.Algorithm
             var configs = SubscriptionManager.SubscriptionDataConfigService
                 .GetSubscriptionDataConfigs(security.Symbol);
 
+            var dataTimeZone = MarketHoursDatabase
+                .GetDataTimeZone(security.Symbol.ID.Market, security.Symbol, security.Symbol.SecurityType);
+
             // For speed and memory usage, use Resolution.Minute as the minimum resolution
             var resolution = (Resolution)Math.Max((int)Resolution.Minute, (int)configs.GetHighestResolution());
             var isExtendedMarketHours = configs.IsExtendedMarketHours();
-
-            var startTime = _historyRequestFactory.GetStartTimeAlgoTz(security.Symbol, 1, resolution, security.Exchange.Hours);
-            var endTime   = Time.RoundDown(resolution.ToTimeSpan());
 
             // request QuoteBar for Options and Futures
             var dataType = typeof(BaseData);
@@ -506,43 +506,78 @@ namespace QuantConnect.Algorithm
             // Get the config with the largest resolution
             var subscriptionDataConfig = GetMatchingSubscription(security.Symbol, dataType);
 
-            // if subscription resolution is Tick, we also need to update the data type from Tick to TradeBar/QuoteBar
-            if (subscriptionDataConfig != null && subscriptionDataConfig.Resolution == Resolution.Tick)
+            TickType tickType;
+
+            if (subscriptionDataConfig == null)
             {
-                dataType = LeanData.GetDataType(resolution, subscriptionDataConfig.TickType);
-                subscriptionDataConfig = new SubscriptionDataConfig(subscriptionDataConfig, dataType, resolution: resolution);
+                dataType = typeof(TradeBar);
+                tickType = LeanData.GetCommonTickTypeForCommonDataTypes(dataType, security.Type);
+            }
+            else
+            {
+                // if subscription resolution is Tick, we also need to update the data type from Tick to TradeBar/QuoteBar
+                if (subscriptionDataConfig.Resolution == Resolution.Tick)
+                {
+                    dataType = LeanData.GetDataType(resolution, subscriptionDataConfig.TickType);
+                    subscriptionDataConfig = new SubscriptionDataConfig(subscriptionDataConfig, dataType, resolution: resolution);
+                }
+
+                dataType = subscriptionDataConfig.Type;
+                tickType = subscriptionDataConfig.TickType;
             }
 
-            var request = new HistoryRequest(
-                startTime.ConvertToUtc(_localTimeKeeper.TimeZone),
-                endTime.ConvertToUtc(_localTimeKeeper.TimeZone),
-                subscriptionDataConfig == null ? typeof(TradeBar) : subscriptionDataConfig.Type,
-                security.Symbol,
-                resolution,
-                security.Exchange.Hours,
-                MarketHoursDatabase.FromDataFolder().GetDataTimeZone(security.Symbol.ID.Market, security.Symbol, security.Symbol.SecurityType),
-                resolution,
-                isExtendedMarketHours,
-                configs.IsCustomData(),
-                configs.DataNormalizationMode(),
-                subscriptionDataConfig == null ? LeanData.GetCommonTickTypeForCommonDataTypes(typeof(TradeBar), security.Type) : subscriptionDataConfig.TickType
-            );
-
-            var history = History(new List<HistoryRequest> { request }).ToList();
-
-            if (history.Any() && history.First().Values.Any())
+            Func<int, BaseData> getLastKnownPriceForPeriods = backwardsPeriods =>
             {
-                return history.First().Values.First();
+                var startTimeUtc = _historyRequestFactory
+                    .GetStartTimeAlgoTz(security.Symbol, backwardsPeriods, resolution, security.Exchange.Hours)
+                    .ConvertToUtc(_localTimeKeeper.TimeZone);
+
+                var request = new HistoryRequest(
+                    startTimeUtc,
+                    UtcTime,
+                    dataType,
+                    security.Symbol,
+                    resolution,
+                    security.Exchange.Hours,
+                    dataTimeZone,
+                    resolution,
+                    isExtendedMarketHours,
+                    configs.IsCustomData(),
+                    configs.DataNormalizationMode(),
+                    tickType
+                );
+
+                BaseData result = null;
+                History(new List<HistoryRequest> { request })
+                    .PushThrough(bar =>
+                    {
+                        if (!bar.IsFillForward)
+                            result = bar;
+                    });
+
+                return result;
+            };
+
+            var lastKnownPrice = getLastKnownPriceForPeriods(1);
+            if (lastKnownPrice != null)
+            {
+                return lastKnownPrice;
             }
 
-            return null;
+            // If the first attempt to get the last know price returns null, it maybe the case of an illiquid security.
+            // We increase the look-back period for this case accordingly to the resolution to cover 3 trading days
+            var periods =
+                resolution == Resolution.Daily ? 3 :
+                resolution == Resolution.Hour ? 24 : 1440;
+
+            return getLastKnownPriceForPeriods(periods);
         }
 
         private IEnumerable<Slice> History(IEnumerable<HistoryRequest> requests, DateTimeZone timeZone)
         {
             var sentMessage = false;
             // filter out any universe securities that may have made it this far
-            var reqs = requests.Where(hr => !UniverseManager.ContainsKey(hr.Symbol)) .ToList();
+            var reqs = requests.Where(hr => !UniverseManager.ContainsKey(hr.Symbol)).ToList();
             foreach (var request in reqs)
             {
                 // prevent future requests
@@ -574,7 +609,7 @@ namespace QuantConnect.Algorithm
             {
                 var requests = new List<HistoryRequest>();
 
-                foreach (var config in GetMatchingSubscriptions(x, typeof(BaseData)))
+                foreach (var config in GetMatchingSubscriptions(x, typeof(BaseData), resolution))
                 {
                     var request = _historyRequestFactory.CreateHistoryRequest(config, startAlgoTz, endAlgoTz, GetExchangeHours(x), resolution);
 
@@ -602,7 +637,7 @@ namespace QuantConnect.Algorithm
                 var start = _historyRequestFactory.GetStartTimeAlgoTz(x, periods, res.Value, exchange);
                 var end = Time.RoundDown(res.Value.ToTimeSpan());
 
-                return GetMatchingSubscriptions(x, typeof(BaseData))
+                return GetMatchingSubscriptions(x, typeof(BaseData), resolution)
                     .Select(config => _historyRequestFactory.CreateHistoryRequest(config, start, end, exchange, res));
             });
         }
@@ -613,7 +648,7 @@ namespace QuantConnect.Algorithm
             return GetMatchingSubscriptions(symbol, type).FirstOrDefault();
         }
 
-        private IEnumerable<SubscriptionDataConfig> GetMatchingSubscriptions(Symbol symbol, Type type)
+        private IEnumerable<SubscriptionDataConfig> GetMatchingSubscriptions(Symbol symbol, Type type, Resolution? resolution = null)
         {
             Security security;
             if (Securities.TryGetValue(symbol, out security))
@@ -625,10 +660,23 @@ namespace QuantConnect.Algorithm
             }
             else
             {
-                var resolution = UniverseSettings.Resolution;
                 var timeZone = GetExchangeHours(symbol).TimeZone;
-                var subscriptionDataTypes = SubscriptionManager.LookupSubscriptionConfigDataTypes(symbol.SecurityType, resolution, symbol.IsCanonical());
-                return subscriptionDataTypes.Select(x => new SubscriptionDataConfig(x.Item1, symbol, resolution, timeZone, timeZone, UniverseSettings.FillForward, UniverseSettings.ExtendedMarketHours, false, false, x.Item2));
+                resolution = GetResolution(symbol, resolution);
+
+                return SubscriptionManager
+                    .LookupSubscriptionConfigDataTypes(symbol.SecurityType, resolution.Value, symbol.IsCanonical())
+                    .Select(x => new SubscriptionDataConfig(
+                        x.Item1,
+                        symbol,
+                        resolution.Value,
+                        timeZone, timeZone,
+                        UniverseSettings.FillForward,
+                        UniverseSettings.ExtendedMarketHours,
+                        true,
+                        false,
+                        x.Item2,
+                        true,
+                        UniverseSettings.DataNormalizationMode));
             }
         }
 

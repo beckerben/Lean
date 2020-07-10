@@ -20,12 +20,9 @@ using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using QuantConnect.Interfaces;
 using QuantConnect.Lean.Engine.DataFeeds;
-using QuantConnect.Lean.Engine.Setup;
 using QuantConnect.Lean.Engine.TransactionHandlers;
 using QuantConnect.Orders;
 using QuantConnect.Packets;
-using QuantConnect.Securities;
-using QuantConnect.Statistics;
 
 namespace QuantConnect.Lean.Engine.Results
 {
@@ -85,11 +82,10 @@ namespace QuantConnect.Lean.Engine.Results
         /// Initialize the result handler with this result packet.
         /// </summary>
         /// <param name="job">Algorithm job packet for this result handler</param>
-        /// <param name="messagingHandler"></param>
-        /// <param name="api"></param>
-        /// <param name="setupHandler"></param>
+        /// <param name="messagingHandler">The messaging handler provider to use</param>
+        /// <param name="api">The api implementation to use</param>
         /// <param name="transactionHandler"></param>
-        void Initialize(AlgorithmNodePacket job, IMessagingHandler messagingHandler, IApi api, ISetupHandler setupHandler, ITransactionHandler transactionHandler);
+        void Initialize(AlgorithmNodePacket job, IMessagingHandler messagingHandler, IApi api, ITransactionHandler transactionHandler);
 
         /// <summary>
         /// Primary result thread entry point to process the result message queue and send it to whatever endpoint is set.
@@ -135,63 +131,18 @@ namespace QuantConnect.Lean.Engine.Results
         void RuntimeError(string message, string stacktrace = "");
 
         /// <summary>
-        /// Add a sample to the chart specified by the chartName, and seriesName.
+        /// Method to attempt to update the <see cref="IResultHandler"/> with various performance metrics.
         /// </summary>
-        /// <param name="chartName">String chart name to place the sample.</param>
-        /// <param name="seriesName">Series name for the chart.</param>
-        /// <param name="seriesType">Series type for the chart.</param>
-        /// <param name="time">Time for the sample</param>
-        /// <param name="value">Value for the chart sample.</param>
-        /// <param name="unit">Unit for the sample chart</param>
-        /// <param name="seriesIndex">Index of the series we're sampling</param>
-        /// <remarks>Sample can be used to create new charts or sample equity - daily performance.</remarks>
-        void Sample(string chartName, string seriesName, int seriesIndex, SeriesType seriesType, DateTime time, decimal value, string unit = "$");
-
-        /// <summary>
-        /// Wrapper methond on sample to create the equity chart.
-        /// </summary>
-        /// <param name="time">Time of the sample.</param>
-        /// <param name="value">Equity value at this moment in time.</param>
-        /// <seealso cref="Sample(string,string,int,SeriesType,DateTime,decimal,string)"/>
-        void SampleEquity(DateTime time, decimal value);
-
-        /// <summary>
-        /// Sample the current daily performance directly with a time-value pair.
-        /// </summary>
-        /// <param name="time">Current backtest date.</param>
-        /// <param name="value">Current daily performance value.</param>
-        /// <seealso cref="Sample(string,string,int,SeriesType,DateTime,decimal,string)"/>
-        void SamplePerformance(DateTime time, decimal value);
-
-        /// <summary>
-        /// Sample the current benchmark performance directly with a time-value pair.
-        /// </summary>
-        /// <param name="time">Current backtest date.</param>
-        /// <param name="value">Current benchmark value.</param>
-        /// <seealso cref="Sample(string,string,int,SeriesType,DateTime,decimal,string)"/>
-        void SampleBenchmark(DateTime time, decimal value);
-
-        /// <summary>
-        /// Sample the asset prices to generate plots.
-        /// </summary>
-        /// <param name="symbol">Symbol we're sampling.</param>
-        /// <param name="time">Time of sample</param>
-        /// <param name="value">Value of the asset price</param>
-        /// <seealso cref="Sample(string,string,int,SeriesType,DateTime,decimal,string)"/>
-        void SampleAssetPrices(Symbol symbol, DateTime time, decimal value);
-
-        /// <summary>
-        /// Add a range of samples from the users algorithms to the end of our current list.
-        /// </summary>
-        /// <param name="samples">Chart updates since the last request.</param>
-        /// <seealso cref="Sample(string,string,int,SeriesType,DateTime,decimal,string)"/>
-        void SampleRange(List<Chart> samples);
+        /// <param name="time">Current time</param>
+        /// <param name="force">Forces a sampling event if true</param>
+        void Sample(DateTime time, bool force = false);
 
         /// <summary>
         /// Set the algorithm of the result handler after its been initialized.
         /// </summary>
         /// <param name="algorithm">Algorithm object matching IAlgorithm interface</param>
-        void SetAlgorithm(IAlgorithm algorithm);
+        /// <param name="startingPortfolioValue">Algorithm starting capital for statistics calculations</param>
+        void SetAlgorithm(IAlgorithm algorithm, decimal startingPortfolioValue);
 
         /// <summary>
         /// Sets the current alpha runtime statistics
@@ -210,14 +161,7 @@ namespace QuantConnect.Lean.Engine.Results
         /// <summary>
         /// Post the final result back to the controller worker if backtesting, or to console if local.
         /// </summary>
-        /// <param name="job">Lean AlgorithmJob task</param>
-        /// <param name="orders">Collection of orders from the algorithm</param>
-        /// <param name="profitLoss">Collection of time-profit values for the algorithm</param>
-        /// <param name="holdings">Current holdings state for the algorithm</param>
-        /// <param name="cashbook">Cashbook of the current cash of the algorithm</param>
-        /// <param name="statisticsResults">Statistics information for the algorithm (empty if not finished)</param>
-        /// <param name="banner">Runtime statistics banner information</param>
-        void SendFinalResult(AlgorithmNodePacket job, Dictionary<int, Order> orders, Dictionary<DateTime, decimal> profitLoss, Dictionary<string, Holding> holdings, CashBook cashbook, StatisticsResults statisticsResults, Dictionary<string, string> banner);
+        void SendFinalResult();
 
         /// <summary>
         /// Send a algorithm status update to the user of the algorithms running state.
@@ -225,12 +169,6 @@ namespace QuantConnect.Lean.Engine.Results
         /// <param name="status">Status enum of the algorithm.</param>
         /// <param name="message">Optional string message describing reason for status change.</param>
         void SendStatusUpdate(AlgorithmStatus status, string message = "");
-
-        /// <summary>
-        /// Set the chart name:
-        /// </summary>
-        /// <param name="symbol">Symbol of the chart we want.</param>
-        void SetChartSubscription(string symbol);
 
         /// <summary>
         /// Set a dynamic runtime statistic to show in the (live) algorithm header
@@ -259,13 +197,6 @@ namespace QuantConnect.Lean.Engine.Results
         /// Process any synchronous events in here that are primarily triggered from the algorithm loop
         /// </summary>
         void ProcessSynchronousEvents(bool forceProcess = false);
-
-        /// <summary>
-        /// Save the logs
-        /// </summary>
-        /// <param name="id">Id that will be incorporated into the algorithm log name</param>
-        /// <param name="logs">The logs to save</param>
-        string SaveLogs(string id, IEnumerable<string> logs);
 
         /// <summary>
         /// Save the results

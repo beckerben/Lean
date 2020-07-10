@@ -15,7 +15,6 @@
 */
 
 using System.Collections.Generic;
-using QuantConnect.Algorithm.Framework;
 using QuantConnect.Algorithm.Framework.Alphas;
 using QuantConnect.Algorithm.Framework.Execution;
 using QuantConnect.Algorithm.Framework.Portfolio;
@@ -30,7 +29,7 @@ namespace QuantConnect.Algorithm.CSharp
     /// This algorithm shows how the execution model works to split up orders and submit them only when
     /// the price is on the favorable side of the intraday VWAP.
     /// </summary>
-    public class VolumeWeightedAveragePriceExecutionModelRegressionAlgorithm : QCAlgorithmFramework, IRegressionAlgorithmDefinition
+    public class VolumeWeightedAveragePriceExecutionModelRegressionAlgorithm : QCAlgorithm, IRegressionAlgorithmDefinition
     {
         public override void Initialize()
         {
@@ -78,22 +77,29 @@ namespace QuantConnect.Algorithm.CSharp
             {"Total Trades", "394"},
             {"Average Win", "0.03%"},
             {"Average Loss", "0.00%"},
-            {"Compounding Annual Return", "608.511%"},
+            {"Compounding Annual Return", "608.443%"},
             {"Drawdown", "1.000%"},
-            {"Expectancy", "5.981"},
+            {"Expectancy", "5.980"},
             {"Net Profit", "2.535%"},
-            {"Sharpe Ratio", "6.099"},
+            {"Sharpe Ratio", "6.76"},
+            {"Probabilistic Sharpe Ratio", "76.446%"},
             {"Loss Rate", "35%"},
             {"Win Rate", "65%"},
             {"Profit-Loss Ratio", "9.79"},
-            {"Alpha", "0"},
-            {"Beta", "116.165"},
-            {"Annual Standard Deviation", "0.21"},
-            {"Annual Variance", "0.044"},
-            {"Information Ratio", "6.049"},
-            {"Tracking Error", "0.21"},
-            {"Treynor Ratio", "0.011"},
-            {"Total Fees", "$506.02"},
+            {"Alpha", "0.545"},
+            {"Beta", "0.997"},
+            {"Annual Standard Deviation", "0.237"},
+            {"Annual Variance", "0.056"},
+            {"Information Ratio", "5.998"},
+            {"Tracking Error", "0.09"},
+            {"Treynor Ratio", "1.608"},
+            {"Total Fees", "$506.03"},
+            {"Fitness Score", "0.932"},
+            {"Kelly Criterion Estimate", "34.534"},
+            {"Kelly Criterion Probability Value", "0.444"},
+            {"Sortino Ratio", "79228162514264337593543950335"},
+            {"Return Over Maximum Drawdown", "770.329"},
+            {"Portfolio Turnover", "0.932"},
             {"Total Insights Generated", "5"},
             {"Total Insights Closed", "3"},
             {"Total Insights Analysis Completed", "3"},

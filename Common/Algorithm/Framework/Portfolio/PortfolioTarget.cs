@@ -13,8 +13,11 @@
  * limitations under the License.
 */
 
+using System;
+using System.Collections.Generic;
 using QuantConnect.Interfaces;
 using QuantConnect.Securities;
+using static QuantConnect.StringExtensions;
 
 namespace QuantConnect.Algorithm.Framework.Portfolio
 {
@@ -54,7 +57,7 @@ namespace QuantConnect.Algorithm.Framework.Portfolio
         /// <returns>A portfolio target for the specified symbol/percent</returns>
         public static IPortfolioTarget Percent(IAlgorithm algorithm, Symbol symbol, double percent)
         {
-            return Percent(algorithm, symbol, (decimal) percent);
+            return Percent(algorithm, symbol, percent.SafeDecimalCast());
         }
 
         /// <summary>
@@ -68,23 +71,52 @@ namespace QuantConnect.Algorithm.Framework.Portfolio
         /// <returns>A portfolio target for the specified symbol/percent</returns>
         public static IPortfolioTarget Percent(IAlgorithm algorithm, Symbol symbol, decimal percent, bool returnDeltaQuantity = false)
         {
-            var security = algorithm.Securities[symbol];
+            var absolutePercentage = Math.Abs(percent);
+            if (absolutePercentage > algorithm.Settings.MaxAbsolutePortfolioTargetPercentage
+                || absolutePercentage != 0 && absolutePercentage < algorithm.Settings.MinAbsolutePortfolioTargetPercentage)
+            {
+                algorithm.Error(
+                    Invariant($"The portfolio target percent: {percent}, does not comply with the current ") +
+                    Invariant($"'Algorithm.Settings' 'MaxAbsolutePortfolioTargetPercentage': {algorithm.Settings.MaxAbsolutePortfolioTargetPercentage}") +
+                    Invariant($" or 'MinAbsolutePortfolioTargetPercentage': {algorithm.Settings.MinAbsolutePortfolioTargetPercentage}. Skipping")
+                );
+                return null;
+            }
+
+            Security security;
+            try
+            {
+                security = algorithm.Securities[symbol];
+            }
+            catch (KeyNotFoundException)
+            {
+                algorithm.Error(Invariant($"{symbol} not found in portfolio. Request this data when initializing the algorithm."));
+                return null;
+            }
+
             if (security.Price == 0)
             {
-                algorithm.Error($"The order quantity for {symbol.Value} cannot be calculated: the price of the security is zero.");
+                algorithm.Error(Invariant(
+                    $"The order quantity for {symbol.Value} cannot be calculated: the price of the security is zero."
+                ));
+
                 return null;
             }
 
             // Factoring in FreePortfolioValuePercentage.
-            var adjustedPercent = percent * (1 - algorithm.Settings.FreePortfolioValuePercentage);
+            var adjustedPercent = percent * (algorithm.Portfolio.TotalPortfolioValue - algorithm.Settings.FreePortfolioValue)
+                                  / algorithm.Portfolio.TotalPortfolioValue;
 
             var result = security.BuyingPowerModel.GetMaximumOrderQuantityForTargetValue(
-                new GetMaximumOrderQuantityForTargetValueParameters(algorithm.Portfolio, security, adjustedPercent)
+                new GetMaximumOrderQuantityForTargetValueParameters(algorithm.Portfolio, security, adjustedPercent, silenceNonErrorReasons:true)
             );
 
             if (result.IsError)
             {
-                algorithm.Error($"Unable to compute order quantity of {symbol}. Reason: {result.Reason}. Returning null.");
+                algorithm.Error(Invariant(
+                    $"Unable to compute order quantity of {symbol}. Reason: {result.Reason} Returning null."
+                ));
+
                 return null;
             }
 

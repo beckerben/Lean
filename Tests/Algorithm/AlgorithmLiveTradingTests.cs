@@ -48,8 +48,7 @@ namespace QuantConnect.Tests.Algorithm
             var transactionHandler = new BrokerageTransactionHandler();
 
             transactionHandler.Initialize(algorithm, brokerage, new LiveTradingResultHandler());
-            new Thread(transactionHandler.Run) { IsBackground = true }.Start();
-            Thread.Sleep(2000);
+            Thread.Sleep(250);
             algorithm.Transactions.SetOrderProcessor(transactionHandler);
 
             var symbol = security.Symbol;
@@ -90,6 +89,9 @@ namespace QuantConnect.Tests.Algorithm
             public void Disconnect() {}
             public bool AccountInstantlyUpdated { get; } = true;
             public IEnumerable<BaseData> GetHistory(HistoryRequest request) { return Enumerable.Empty<BaseData>(); }
+            public DateTime LastSyncDateTimeUtc { get; } = DateTime.UtcNow;
+            public bool ShouldPerformCashSync(DateTime currentTimeUtc) { return false; }
+            public bool PerformCashSync(IAlgorithm algorithm, DateTime currentTimeUtc, Func<TimeSpan> getTimeSinceLastFill) { return true; }
         }
     }
 }

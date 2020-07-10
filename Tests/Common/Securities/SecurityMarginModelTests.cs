@@ -34,6 +34,69 @@ namespace QuantConnect.Tests.Common.Securities
         private static readonly string _cashSymbol = Currencies.USD;
         private static FakeOrderProcessor _fakeOrderProcessor;
 
+        [TestCase(1)]
+        [TestCase(2)]
+        [TestCase(50)]
+        public void MarginRemainingForLeverage(decimal leverage)
+        {
+            var algorithm = GetAlgorithm();
+            algorithm.SetCash(1000);
+
+            var spy = InitAndGetSecurity(algorithm, 0);
+            spy.Holdings.SetHoldings(25, 100);
+            spy.SetLeverage(leverage);
+
+            var spyMarginAvailable = spy.Holdings.HoldingsValue - spy.Holdings.HoldingsValue * (1 / leverage);
+
+            var marginRemaining = algorithm.Portfolio.MarginRemaining;
+            Assert.AreEqual(1000 + spyMarginAvailable, marginRemaining);
+        }
+
+        [TestCase(1)]
+        [TestCase(2)]
+        [TestCase(50)]
+        public void MarginUsedForPositionWhenPriceDrops(decimal leverage)
+        {
+            var algorithm = GetAlgorithm();
+
+            // (1000 * 20) = 20k
+            // Initial and maintenance margin = (1000 * 20) / leverage = X
+            var spy = InitAndGetSecurity(algorithm, 0);
+            spy.Holdings.SetHoldings(20, 1000);
+            spy.SetLeverage(leverage);
+
+            // Drop 40% price from $20 to $12
+            // 1000 * 12 = 12k
+            Update(spy, 12);
+
+            var marginForPosition = spy.BuyingPowerModel.GetReservedBuyingPowerForPosition(
+                new ReservedBuyingPowerForPositionParameters(spy)).Value;
+            Assert.AreEqual(1000 * 12 / leverage, marginForPosition);
+        }
+
+        [TestCase(1)]
+        [TestCase(2)]
+        [TestCase(50)]
+        public void MarginUsedForPositionWhenPriceIncreases(decimal leverage)
+        {
+            var algorithm = GetAlgorithm();
+            algorithm.SetCash(1000);
+
+            // (1000 * 20) = 20k
+            // Initial and maintenance margin = (1000 * 20) / leverage = X
+            var spy = InitAndGetSecurity(algorithm, 0);
+            spy.Holdings.SetHoldings(25, 1000);
+            spy.SetLeverage(leverage);
+
+            // Increase from $20 to $40
+            // 1000 * 40 = 400000
+            Update(spy, 40);
+
+            var marginForPosition = spy.BuyingPowerModel.GetReservedBuyingPowerForPosition(
+                new ReservedBuyingPowerForPositionParameters(spy)).Value;
+            Assert.AreEqual(1000 * 40 / leverage, marginForPosition);
+        }
+
         [Test]
         public void ZeroTargetWithZeroHoldingsIsNotAnError()
         {
@@ -46,6 +109,18 @@ namespace QuantConnect.Tests.Common.Securities
             Assert.AreEqual(0, result.Quantity);
             Assert.IsTrue(result.Reason.IsNullOrEmpty());
             Assert.IsFalse(result.IsError);
+        }
+
+        [Test]
+        public void ReturnsMinimumOrderValueReason()
+        {
+            var algorithm = GetAlgorithm();
+            var security = InitAndGetSecurity(algorithm, 0);
+            var model = new SecurityMarginModel();
+            var result = model.GetMaximumOrderQuantityForTargetValue(algorithm.Portfolio, security, 0.00000001m);
+            Assert.AreEqual(0m, result.Quantity);
+            Assert.IsFalse(result.IsError);
+            Assert.IsTrue(result.Reason.Contains("is less than the minimum"));
         }
 
         [Test]
@@ -75,6 +150,64 @@ namespace QuantConnect.Tests.Common.Securities
         }
 
         [Test]
+        public void SetHoldings_ZeroToFullLong_NonAccountCurrency_ZeroQuoteCurrency()
+        {
+            var algorithm = GetAlgorithm();
+            algorithm.Portfolio.CashBook.Clear();
+            algorithm.Portfolio.SetAccountCurrency("EUR");
+            algorithm.Portfolio.SetCash(10000);
+            // We don't have quote currency - we will get a "loan"
+            algorithm.Portfolio.SetCash(Currencies.USD, 0, 0.88m);
+            var security = InitAndGetSecurity(algorithm, 5);
+
+            algorithm.Settings.FreePortfolioValue =
+                algorithm.Portfolio.TotalPortfolioValue * algorithm.Settings.FreePortfolioValuePercentage;
+
+            var actual = algorithm.CalculateOrderQuantity(_symbol, 1m * security.BuyingPowerModel.GetLeverage(security));
+            // (10000 * 2 * 0.9975 setHoldingsBuffer) / 25 * 0.88 conversion rate - 5 USD fee * 0.88 conversion rate ~=906m
+            Assert.AreEqual(906m, actual);
+            Assert.IsTrue(HasSufficientBuyingPowerForOrder(actual, security, algorithm));
+        }
+
+        [TestCase("Long")]
+        [TestCase("Short")]
+        public void GetReservedBuyingPowerForPosition_NonAccountCurrency_ZeroQuoteCurrency(string position)
+        {
+            var algorithm = GetAlgorithm();
+            algorithm.Portfolio.CashBook.Clear();
+            algorithm.Portfolio.SetAccountCurrency("EUR");
+            algorithm.Portfolio.SetCash(10000);
+            algorithm.Portfolio.SetCash(Currencies.USD, 0, 0.88m);
+            var security = InitAndGetSecurity(algorithm, 5);
+            security.Holdings.SetHoldings(security.Price,
+                (position == "Long" ? 1 : -1) * 100);
+
+            var actual = security.BuyingPowerModel.GetReservedBuyingPowerForPosition(new ReservedBuyingPowerForPositionParameters(security));
+            // 100quantity * 25price * 0.88rate * 0.5 MaintenanceMarginRequirement = 1100
+            Assert.AreEqual(1100, actual.Value);
+        }
+
+        [Test]
+        public void SetHoldings_ZeroToFullLong_NonAccountCurrency()
+        {
+            var algorithm = GetAlgorithm();
+            algorithm.Portfolio.CashBook.Clear();
+            algorithm.Portfolio.SetAccountCurrency("EUR");
+            algorithm.Portfolio.SetCash(10000);
+            // We have 1000 USD too
+            algorithm.Portfolio.SetCash(Currencies.USD, 1000, 0.88m);
+            var security = InitAndGetSecurity(algorithm, 5);
+
+            algorithm.Settings.FreePortfolioValue =
+                algorithm.Portfolio.TotalPortfolioValue * algorithm.Settings.FreePortfolioValuePercentage;
+
+            var actual = algorithm.CalculateOrderQuantity(_symbol, 1m * security.BuyingPowerModel.GetLeverage(security));
+            // ((10000 + 1000 USD * 0.88 rate) * 2 * 0.9975 setHoldingsBuffer) / 25 * 0.88 rate - 5 USD fee * 0.88 rate ~=986m
+            Assert.AreEqual(986m, actual);
+            Assert.IsTrue(HasSufficientBuyingPowerForOrder(actual, security, algorithm));
+        }
+
+        [Test]
         public void SetHoldings_Long_TooBigOfATarget()
         {
             var algo = GetAlgorithm();
@@ -83,6 +216,26 @@ namespace QuantConnect.Tests.Common.Securities
             // (100000 * 2.1* 0.9975 setHoldingsBuffer) / 25 - fee ~=8378m
             Assert.AreEqual(8378m, actual);
             Assert.IsFalse(HasSufficientBuyingPowerForOrder(actual, security, algo));
+        }
+
+        [Test]
+        public void SetHoldings_Long_TooBigOfATarget_NonAccountCurrency()
+        {
+            var algorithm = GetAlgorithm();
+            algorithm.Portfolio.CashBook.Clear();
+            algorithm.Portfolio.SetAccountCurrency("EUR");
+            algorithm.Portfolio.SetCash(10000);
+            // We don't have quote currency - we will get a "loan"
+            algorithm.Portfolio.SetCash(Currencies.USD, 0, 0.88m);
+            var security = InitAndGetSecurity(algorithm, 5);
+
+            algorithm.Settings.FreePortfolioValue =
+                algorithm.Portfolio.TotalPortfolioValue * algorithm.Settings.FreePortfolioValuePercentage;
+
+            var actual = algorithm.CalculateOrderQuantity(_symbol, 1m * security.BuyingPowerModel.GetLeverage(security) + 0.1m);
+            // (10000 * 2.1 * 0.9975 setHoldingsBuffer) / 25 * 0.88 conversion rate - 5 USD fee * 0.88 conversion rate ~=951m
+            Assert.AreEqual(951m, actual);
+            Assert.IsFalse(HasSufficientBuyingPowerForOrder(actual, security, algorithm));
         }
 
         [Test]
@@ -97,6 +250,44 @@ namespace QuantConnect.Tests.Common.Securities
         }
 
         [Test]
+        public void SetHoldings_ZeroToFullShort_NonAccountCurrency_ZeroQuoteCurrency()
+        {
+            var algorithm = GetAlgorithm();
+            algorithm.Portfolio.CashBook.Clear();
+            algorithm.Portfolio.SetAccountCurrency("EUR");
+            algorithm.Portfolio.SetCash(10000);
+            algorithm.Portfolio.SetCash(Currencies.USD, 0, 0.88m);
+            var security = InitAndGetSecurity(algorithm, 5);
+
+            algorithm.Settings.FreePortfolioValue =
+                algorithm.Portfolio.TotalPortfolioValue * algorithm.Settings.FreePortfolioValuePercentage;
+
+            var actual = algorithm.CalculateOrderQuantity(_symbol, - 1m * security.BuyingPowerModel.GetLeverage(security));
+            // (10000 * - 2 * 0.9975 setHoldingsBuffer) / 25 * 0.88 conversion rate - 5 USD fee * 0.88 conversion rate ~=906m
+            Assert.AreEqual(-906m, actual);
+            Assert.IsTrue(HasSufficientBuyingPowerForOrder(actual, security, algorithm));
+        }
+
+        [Test]
+        public void SetHoldings_ZeroToFullShort_NonAccountCurrency()
+        {
+            var algorithm = GetAlgorithm();
+            algorithm.Portfolio.CashBook.Clear();
+            algorithm.Portfolio.SetAccountCurrency("EUR");
+            algorithm.Portfolio.SetCash(10000);
+            algorithm.Portfolio.SetCash(Currencies.USD, 1000, 0.88m);
+            var security = InitAndGetSecurity(algorithm, 5);
+
+            algorithm.Settings.FreePortfolioValue =
+                algorithm.Portfolio.TotalPortfolioValue * algorithm.Settings.FreePortfolioValuePercentage;
+
+            var actual = algorithm.CalculateOrderQuantity(_symbol, -1m * security.BuyingPowerModel.GetLeverage(security));
+            // ((10000 + 1000 * 0.88)* - 2 * 0.9975 setHoldingsBuffer) / 25 * 0.88 conversion rate - 5 USD fee * 0.88 conversion rate ~=986m
+            Assert.AreEqual(-986m, actual);
+            Assert.IsTrue(HasSufficientBuyingPowerForOrder(actual, security, algorithm));
+        }
+
+        [Test]
         public void SetHoldings_Short_TooBigOfATarget()
         {
             var algo = GetAlgorithm();
@@ -105,6 +296,25 @@ namespace QuantConnect.Tests.Common.Securities
             // (100000 * - 2.1m * 0.9975 setHoldingsBuffer) / 25 - fee~=-8378m
             Assert.AreEqual(-8378m, actual);
             Assert.IsFalse(HasSufficientBuyingPowerForOrder(actual, security, algo));
+        }
+
+        [Test]
+        public void SetHoldings_Short_TooBigOfATarget_NonAccountCurrency()
+        {
+            var algorithm = GetAlgorithm();
+            algorithm.Portfolio.CashBook.Clear();
+            algorithm.Portfolio.SetAccountCurrency("EUR");
+            algorithm.Portfolio.SetCash(10000);
+            algorithm.Portfolio.SetCash(Currencies.USD, 0, 0.88m);
+            var security = InitAndGetSecurity(algorithm, 5);
+
+            algorithm.Settings.FreePortfolioValue =
+                algorithm.Portfolio.TotalPortfolioValue * algorithm.Settings.FreePortfolioValuePercentage;
+
+            var actual = algorithm.CalculateOrderQuantity(_symbol, -1m * security.BuyingPowerModel.GetLeverage(security) - 0.1m);
+            // (10000 * - 2.1 * 0.9975 setHoldingsBuffer) / 25 * 0.88 conversion rate - 5 USD fee * 0.88 conversion rate ~=951m
+            Assert.AreEqual(-951m, actual);
+            Assert.IsFalse(HasSufficientBuyingPowerForOrder(actual, security, algorithm));
         }
 
         [Test]
@@ -390,12 +600,31 @@ namespace QuantConnect.Tests.Common.Securities
             Assert.IsTrue(HasSufficientBuyingPowerForOrder(quantity, security, algo)); ;
         }
 
+        [TestCase(0)]
+        [TestCase(10000)]
+        public void NonAccountCurrency_GetBuyingPower(decimal nonAccountCurrencyCash)
+        {
+            var algo = GetAlgorithm();
+            algo.Portfolio.CashBook.Clear();
+            algo.Portfolio.SetAccountCurrency("EUR");
+            algo.Portfolio.SetCash(10000);
+            algo.Portfolio.SetCash(Currencies.USD, nonAccountCurrencyCash, 0.88m);
+            var security = InitAndGetSecurity(algo, 0);
+            Assert.AreEqual(10000m + algo.Portfolio.CashBook[Currencies.USD].ValueInAccountCurrency,
+                algo.Portfolio.TotalPortfolioValue);
+
+            var quantity = security.BuyingPowerModel.GetBuyingPower(
+                new BuyingPowerParameters(algo.Portfolio, security, OrderDirection.Buy)).Value;
+
+            Assert.AreEqual(10000m + algo.Portfolio.CashBook[Currencies.USD].ValueInAccountCurrency,
+                quantity);
+        }
+
         private static QCAlgorithm GetAlgorithm()
         {
             SymbolCache.Clear();
             // Initialize algorithm
             var algo = new QCAlgorithm();
-            algo.SetCash(100000);
             algo.SetFinishedWarmingUp();
             _fakeOrderProcessor = new FakeOrderProcessor();
             algo.Transactions.SetOrderProcessor(_fakeOrderProcessor);
@@ -427,11 +656,11 @@ namespace QuantConnect.Tests.Common.Securities
             }
 
             security.FeeModel = new ConstantFeeModel(fee);
-            Update(algo.Portfolio.CashBook, security, 25);
+            Update(security, 25);
             return security;
         }
 
-        private static void Update(CashBook cashBook, Security security, decimal close)
+        private static void Update(Security security, decimal close)
         {
             security.SetMarketPrice(new TradeBar
             {

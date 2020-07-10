@@ -4,9 +4,6 @@ using System.Globalization;
 using System.Linq;
 using System.Threading;
 using QuantConnect.Brokerages;
-using QuantConnect.Data;
-using QuantConnect.Data.Consolidators;
-using QuantConnect.Data.Market;
 
 namespace QuantConnect.ToolBox.RandomDataGenerator
 {
@@ -23,6 +20,15 @@ namespace QuantConnect.ToolBox.RandomDataGenerator
         public string Market { get; set; }
         public bool IncludeCoarse { get; set; } = true;
         public int SymbolCount { get; set; }
+        public double QuoteTradeRatio { get; set; } = 1;
+        public int RandomSeed { get; set; }
+        public bool RandomSeedSet { get; set; }
+        public double HasIpoPercentage { get; set; }
+        public double HasRenamePercentage { get; set; }
+        public double HasSplitsPercentage { get; set; }
+        public double HasDividendsPercentage { get; set; }
+        public double DividendEveryQuarterPercentage { get; set; }
+
         public TickType[] TickTypes { get; set; }
 
         public static RandomDataGeneratorSettings FromCommandLineArguments(
@@ -34,31 +40,47 @@ namespace QuantConnect.ToolBox.RandomDataGenerator
             string resolutionString,
             string dataDensityString,
             string includeCoarseString,
+            string quoteTradeRatioString,
+            string randomSeedString,
+            string hasIpoPercentageString,
+            string hasRenamePercentageString,
+            string hasSplitsPercentageString,
+            string hasDividendsPercentageString,
+            string dividendEveryQuarterPercentageString,
             ConsoleLeveledOutput output
             )
         {
+            bool randomSeedSet = true;
+
+            int randomSeed;
             int symbolCount;
             bool includeCoarse;
             TickType[] tickTypes;
             Resolution resolution;
+            double quoteTradeRatio;
             DataDensity dataDensity;
             SecurityType securityType;
             DateTime startDate, endDate;
+            double hasIpoPercentage;
+            double hasRenamePercentage;
+            double hasSplitsPercentage;
+            double hasDividendsPercentage;
+            double dividendEveryQuarterPercentage;
 
             // --start
             if (!DateTime.TryParseExact(startDateString, DateFormats, null, DateTimeStyles.None, out startDate))
             {
-                output.Error.WriteLine($"Required parameter --start was incorrectly formatted. Please specify in yyyyMMdd format. Value provided: '{startDateString}'");
+                output.Error.WriteLine($"Required parameter --from-date was incorrectly formatted. Please specify in yyyyMMdd format. Value provided: '{startDateString}'");
             }
 
             // --end
             if (!DateTime.TryParseExact(endDateString, DateFormats, null, DateTimeStyles.None, out endDate))
             {
-                output.Error.WriteLine($"Required parameter --end was incorrectly formatted. Please specify in yyyyMMdd format. Value provided: '{endDateString}'");
+                output.Error.WriteLine($"Required parameter --to-date was incorrectly formatted. Please specify in yyyyMMdd format. Value provided: '{endDateString}'");
             }
 
             // --symbol-count
-            if (!int.TryParse(symbolCountString, out symbolCount))
+            if (!int.TryParse(symbolCountString, out symbolCount) || symbolCount <= 0)
             {
                 output.Error.WriteLine($"Required parameter --symbol-count was incorrectly formatted. Please specify a valid integer greater than zero. Value provided: '{symbolCountString}'");
             }
@@ -135,6 +157,77 @@ namespace QuantConnect.ToolBox.RandomDataGenerator
                 output.Error.WriteLine($"Optional parameter --data-density was incorrectly formated. Please specify a valid DataDensity. Value provided: '{dataDensityString}'. Valid values: {validValues}");
             }
 
+            // --quote-trade-ratio
+            if (string.IsNullOrEmpty(quoteTradeRatioString))
+            {
+                quoteTradeRatio = 1;
+            }
+            else if (!double.TryParse(quoteTradeRatioString, out quoteTradeRatio))
+            {
+                output.Error.WriteLine($"Optional parameter --quote-trade-ratio was incorrectly formatted. Please specify a valid double greater than or equal to zero. Value provided: '{quoteTradeRatioString}'");
+            }
+
+            // --random-seed
+            if (string.IsNullOrEmpty(randomSeedString))
+            {
+                randomSeed = 0;
+                randomSeedSet = false;
+            }
+            else if (!int.TryParse(randomSeedString, out randomSeed))
+            {
+                output.Error.WriteLine($"Optional parameter --random-seed was incorrectly formatted. Please specify a valid integer");
+            }
+
+            // --ipo-percentage
+            if (string.IsNullOrEmpty(hasIpoPercentageString))
+            {
+                hasIpoPercentage = 5.0;
+            }
+            else if (!double.TryParse(hasIpoPercentageString, out hasIpoPercentage))
+            {
+                output.Error.WriteLine($"Optional parameter --ipo-percentage was incorrectly formatted. Please specify a valid double greater than or equal to zero. Value provided: '{hasIpoPercentageString}'");
+            }
+            
+            // --rename-percentage
+            if (string.IsNullOrEmpty(hasRenamePercentageString))
+            {
+                hasRenamePercentage = 30.0;
+            }
+            else if (!double.TryParse(hasRenamePercentageString, out hasRenamePercentage))
+            {
+                output.Error.WriteLine($"Optional parameter --rename-percentage was incorrectly formatted. Please specify a valid double greater than or equal to zero. Value provided: '{hasRenamePercentageString}'");
+            }
+
+            // --splits-percentage
+            if (string.IsNullOrEmpty(hasSplitsPercentageString))
+            {
+                hasSplitsPercentage = 15.0;
+            }
+            else if (!double.TryParse(hasSplitsPercentageString, out hasSplitsPercentage))
+            {
+                output.Error.WriteLine($"Optional parameter --splits-percentage was incorrectly formatted. Please specify a valid double greater than or equal to zero. Value provided: '{hasSplitsPercentageString}'");
+            }
+
+            // --dividends-percentage
+            if (string.IsNullOrEmpty(hasDividendsPercentageString))
+            {
+                hasDividendsPercentage = 60.0;
+            }
+            else if (!double.TryParse(hasDividendsPercentageString, out hasDividendsPercentage))
+            {
+                output.Error.WriteLine($"Optional parameter --dividends-percentage was incorrectly formatted. Please specify a valid double greater than or equal to zero. Value provided: '{hasDividendsPercentageString}'");
+            }
+
+            // --dividend-every-quarter-percentage
+            if (string.IsNullOrEmpty(dividendEveryQuarterPercentageString))
+            {
+                dividendEveryQuarterPercentage = 30.0;
+            }
+            else if (!double.TryParse(dividendEveryQuarterPercentageString, out dividendEveryQuarterPercentage))
+            {
+                output.Error.WriteLine($"Optional parameter --dividend-ever-quarter-percentage was incorrectly formatted. Please specify a valid double greater than or equal to zero. Value provided: '{dividendEveryQuarterPercentageString}'");
+            }
+
             if (output.ErrorMessageWritten)
             {
                 output.Error.WriteLine("Please address the errors and run the application again.");
@@ -177,12 +270,21 @@ namespace QuantConnect.ToolBox.RandomDataGenerator
                 Market = market,
                 SymbolCount = symbolCount,
                 SecurityType = securityType,
+                QuoteTradeRatio = quoteTradeRatio,
 
                 TickTypes = tickTypes,
                 Resolution = resolution,
 
                 DataDensity = dataDensity,
                 IncludeCoarse = includeCoarse,
+                RandomSeed = randomSeed,
+                RandomSeedSet = randomSeedSet,
+
+                HasIpoPercentage = hasIpoPercentage,
+                HasRenamePercentage = hasRenamePercentage,
+                HasSplitsPercentage = hasSplitsPercentage,
+                HasDividendsPercentage = hasDividendsPercentage,
+                DividendEveryQuarterPercentage = dividendEveryQuarterPercentage
             };
         }
 

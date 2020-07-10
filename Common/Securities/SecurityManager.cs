@@ -232,18 +232,19 @@ namespace QuantConnect.Securities
         {
             get
             {
-                if (!_securityManager.ContainsKey(symbol))
+                Security security;
+                if (!_securityManager.TryGetValue(symbol, out security))
                 {
-                    throw new Exception(string.Format("This asset symbol ({0}) was not found in your security list. Please add this security or check it exists before using it with 'Securities.ContainsKey(\"{1}\")'", symbol, SymbolCache.GetTicker(symbol)));
+                    throw new KeyNotFoundException($"This asset symbol ({symbol}) was not found in your security list. Please add this security or check it exists before using it with 'Securities.ContainsKey(\"{SymbolCache.GetTicker(symbol)}\")'");
                 }
-                return _securityManager[symbol];
+                return security;
             }
             set
             {
                 Security existing;
                 if (_securityManager.TryGetValue(symbol, out existing) && existing != value)
                 {
-                    throw new ArgumentException("Unable to over write existing Security: " + symbol.ToString());
+                    throw new ArgumentException($"Unable to over write existing Security: {symbol}");
                 }
 
                 // no security exists for the specified symbol key, add it now
@@ -267,7 +268,7 @@ namespace QuantConnect.Securities
                 Symbol symbol;
                 if (!SymbolCache.TryGetSymbol(ticker, out symbol))
                 {
-                    throw new Exception(string.Format("This asset symbol ({0}) was not found in your security list. Please add this security or check it exists before using it with 'Securities.ContainsKey(\"{0}\")'", ticker));
+                    throw new KeyNotFoundException($"This asset symbol ({ticker}) was not found in your security list. Please add this security or check it exists before using it with 'Securities.ContainsKey(\"{ticker}\")'");
                 }
                 return this[symbol];
             }
@@ -276,7 +277,7 @@ namespace QuantConnect.Securities
                 Symbol symbol;
                 if (!SymbolCache.TryGetSymbol(ticker, out symbol))
                 {
-                    throw new Exception(string.Format("This asset symbol ({0}) was not found in your security list. Please add this security or check it exists before using it with 'Securities.ContainsKey(\"{0}\")'", ticker));
+                    throw new KeyNotFoundException($"This asset symbol ({ticker}) was not found in your security list. Please add this security or check it exists before using it with 'Securities.ContainsKey(\"{ticker}\")'");
                 }
                 this[symbol] = value;
             }

@@ -20,6 +20,8 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Reflection.Emit;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -28,9 +30,17 @@ using System.Threading.Tasks;
 using Newtonsoft.Json;
 using NodaTime;
 using Python.Runtime;
+using QuantConnect.Algorithm.Framework.Portfolio;
+using QuantConnect.Data.UniverseSelection;
+using QuantConnect.Data;
+using QuantConnect.Interfaces;
+using QuantConnect.Logging;
 using QuantConnect.Orders;
+using QuantConnect.Python;
 using QuantConnect.Securities;
+using QuantConnect.Util;
 using Timer = System.Timers.Timer;
+using static QuantConnect.StringExtensions;
 
 namespace QuantConnect
 {
@@ -39,6 +49,134 @@ namespace QuantConnect
     /// </summary>
     public static class Extensions
     {
+        private static readonly Dictionary<IntPtr, PythonActivator> PythonActivators
+            = new Dictionary<IntPtr, PythonActivator>();
+
+        /// <summary>
+        /// Returns true if the specified <see cref="Series"/> instance holds no <see cref="ChartPoint"/>
+        /// </summary>
+        public static bool IsEmpty(this Series series)
+        {
+            return series.Values.Count == 0;
+        }
+
+        /// <summary>
+        /// Returns if the specified <see cref="Chart"/> instance  holds no <see cref="Series"/>
+        /// or they are all empty <see cref="IsEmpty(Series)"/>
+        /// </summary>
+        public static bool IsEmpty(this Chart chart)
+        {
+            return chart.Series.Values.All(IsEmpty);
+        }
+
+        /// <summary>
+        /// Gets a python method by name
+        /// </summary>
+        /// <param name="instance">The object instance to search the method in</param>
+        /// <param name="name">The name of the method</param>
+        /// <returns>The python method or null if not defined or CSharp implemented</returns>
+        public static dynamic GetPythonMethod(this PyObject instance, string name)
+        {
+            using (Py.GIL())
+            {
+                var method = instance.GetAttr(name);
+                var pythonType = method.GetPythonType();
+                var isPythonDefined = pythonType.Repr().Equals("<class \'method\'>");
+
+                return isPythonDefined ? method : null;
+            }
+        }
+
+        /// <summary>
+        /// Returns an ordered enumerable where position reducing orders are executed first
+        /// and the remaining orders are executed in decreasing order value.
+        /// Will NOT return targets for securities that have no data yet.
+        /// Will NOT return targets for which current holdings + open orders quantity, sum up to the target quantity
+        /// </summary>
+        /// <param name="targets">The portfolio targets to order by margin</param>
+        /// <param name="algorithm">The algorithm instance</param>
+        /// <param name="targetIsDelta">True if the target quantity is the delta between the
+        /// desired and existing quantity</param>
+        public static IEnumerable<IPortfolioTarget> OrderTargetsByMarginImpact(
+            this IEnumerable<IPortfolioTarget> targets,
+            IAlgorithm algorithm,
+            bool targetIsDelta = false)
+        {
+            return targets.Select(x => new {
+                    PortfolioTarget = x,
+                    TargetQuantity = x.Quantity,
+                    ExistingQuantity = algorithm.Portfolio[x.Symbol].Quantity
+                                       + algorithm.Transactions.GetOpenOrderTickets(x.Symbol)
+                                           .Aggregate(0m, (d, t) => d + t.Quantity - t.QuantityFilled),
+                    Security = algorithm.Securities[x.Symbol]
+                })
+                .Where(x => x.Security.HasData
+                            && (targetIsDelta ? Math.Abs(x.TargetQuantity) : Math.Abs(x.TargetQuantity - x.ExistingQuantity))
+                            >= x.Security.SymbolProperties.LotSize
+                )
+                .Select(x => new {
+                    PortfolioTarget = x.PortfolioTarget,
+                    OrderValue = Math.Abs((targetIsDelta ? x.TargetQuantity : (x.TargetQuantity - x.ExistingQuantity)) * x.Security.Price),
+                    IsReducingPosition = x.ExistingQuantity != 0
+                                         && Math.Abs((targetIsDelta ? (x.TargetQuantity + x.ExistingQuantity) : x.TargetQuantity)) < Math.Abs(x.ExistingQuantity)
+                })
+                .OrderByDescending(x => x.IsReducingPosition)
+                .ThenByDescending(x => x.OrderValue)
+                .Select(x => x.PortfolioTarget);
+        }
+
+        /// <summary>
+        /// Given a type will create a new instance using the parameterless constructor
+        /// and assert the type implements <see cref="BaseData"/>
+        /// </summary>
+        /// <remarks>One of the objectives of this method is to normalize the creation of the
+        /// BaseData instances while reducing code duplication</remarks>
+        public static BaseData GetBaseDataInstance(this Type type)
+        {
+            var objectActivator = ObjectActivator.GetActivator(type);
+            if (objectActivator == null)
+            {
+                throw new ArgumentException($"Data type \'{type.Name}\' missing parameterless constructor " +
+                    $"E.g. public {type.Name}() {{ }}");
+            }
+
+            var instance = objectActivator.Invoke(new object[] { type });
+            if(instance == null)
+            {
+                // shouldn't happen but just in case...
+                throw new ArgumentException($"Failed to create instance of type \'{type.Name}\'");
+            }
+
+            // we expect 'instance' to inherit BaseData in most cases so we use 'as' versus 'IsAssignableFrom'
+            // since it is slightly cheaper
+            var result = instance as BaseData;
+            if (result == null)
+            {
+                throw new ArgumentException($"Data type \'{type.Name}\' does not inherit required {nameof(BaseData)}");
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Helper method that will cast the provided <see cref="PyObject"/>
+        /// to a T type and dispose of it.
+        /// </summary>
+        /// <typeparam name="T">The target type</typeparam>
+        /// <param name="instance">The <see cref="PyObject"/> instance to cast and dispose</param>
+        /// <returns>The instance of type T. Will return default value if
+        /// provided instance is null</returns>
+        public static T GetAndDispose<T>(this PyObject instance)
+        {
+            if (instance == null)
+            {
+                return default(T);
+            }
+            var returnInstance = instance.As<T>();
+            // will reduce ref count
+            instance.Dispose();
+            return returnInstance;
+        }
+
         /// <summary>
         /// Extension to move one element from list from A to position B.
         /// </summary>
@@ -104,7 +242,7 @@ namespace QuantConnect
             using (var md5Hash = MD5.Create())
             {
                 var data = md5Hash.ComputeHash(Encoding.UTF8.GetBytes(str));
-                foreach (var t in data) builder.Append(t.ToString("x2"));
+                foreach (var t in data) builder.Append(t.ToStringInvariant("x2"));
             }
             return builder.ToString();
         }
@@ -121,9 +259,27 @@ namespace QuantConnect
             var crypto = crypt.ComputeHash(Encoding.UTF8.GetBytes(data), 0, Encoding.UTF8.GetByteCount(data));
             foreach (var theByte in crypto)
             {
-                hash.Append(theByte.ToString("x2"));
+                hash.Append(theByte.ToStringInvariant("x2"));
             }
             return hash.ToString();
+        }
+
+        /// <summary>
+        /// Lazy string to upper implementation.
+        /// Will first verify the string is not already upper and avoid
+        /// the call to <see cref="string.ToUpper()"/> if possible.
+        /// </summary>
+        /// <param name="data">The string to upper</param>
+        /// <returns>The upper string</returns>
+        public static string LazyToUpper(this string data)
+        {
+            // for performance only call to upper if required
+            var alreadyUpper = true;
+            for (int i = 0; i < data.Length && alreadyUpper; i++)
+            {
+                alreadyUpper = char.IsUpper(data[i]);
+            }
+            return alreadyUpper ? data : data.ToUpperInvariant();
         }
 
         /// <summary>
@@ -204,6 +360,24 @@ namespace QuantConnect
         }
 
         /// <summary>
+        /// Will truncate the provided decimal, without rounding, to 3 decimal places
+        /// </summary>
+        /// <param name="value">The value to truncate</param>
+        /// <returns>New instance with just 3 decimal places</returns>
+        public static decimal TruncateTo3DecimalPlaces(this decimal value)
+        {
+            // we will multiply by 1k bellow, if its bigger it will stack overflow
+            if (value >= decimal.MaxValue / 1000
+                || value <= decimal.MinValue / 1000
+                || value == 0)
+            {
+                return value;
+            }
+
+            return Math.Truncate(1000 * value) / 1000;
+        }
+
+        /// <summary>
         /// Provides global smart rounding, numbers larger than 1000 will round to 4 decimal places,
         /// while numbers smaller will round to 7 significant digits
         /// </summary>
@@ -218,8 +392,7 @@ namespace QuantConnect
             }
 
             // this is good for forex and other small numbers
-            var d = (double)input;
-            return (decimal)d.RoundToSignificantDigits(7);
+            return input.RoundToSignificantDigits(7).Normalize();
         }
 
         /// <summary>
@@ -230,6 +403,7 @@ namespace QuantConnect
         /// as a decimal, then the closest decimal value will be returned</returns>
         public static decimal SafeDecimalCast(this double input)
         {
+            if (input.IsNaNOrZero()) return 0;
             if (input <= (double) decimal.MinValue) return decimal.MinValue;
             if (input >= (double) decimal.MaxValue) return decimal.MaxValue;
             return (decimal) input;
@@ -322,6 +496,9 @@ namespace QuantConnect
             int value = 0;
             for (var i = 0; i < str.Length; i++)
             {
+                if (str[i] == '.')
+                    break;
+
                 value = value * 10 + (str[i] - '0');
             }
             return value;
@@ -338,6 +515,9 @@ namespace QuantConnect
             long value = 0;
             for (var i = 0; i < str.Length; i++)
             {
+                if (str[i] == '.')
+                    break;
+
                 value = value * 10 + (str[i] - '0');
             }
             return value;
@@ -432,7 +612,7 @@ namespace QuantConnect
         /// <returns>Last 4 character string of string.</returns>
         public static string GetExtension(this string str) {
             var ext = str.Substring(Math.Max(0, str.Length - 4));
-            var allowedExt = new List<string>() { ".zip", ".csv", ".json" };
+            var allowedExt = new List<string> { ".zip", ".csv", ".json", ".tsv" };
             if (!allowedExt.Contains(ext))
             {
                 ext = ".custom";
@@ -503,7 +683,13 @@ namespace QuantConnect
                 // divide by zero exception
                 return dateTime;
             }
-            return dateTime.AddTicks(-(dateTime.Ticks % interval.Ticks));
+
+            var amount = dateTime.Ticks % interval.Ticks;
+            if (amount > 0)
+            {
+                return dateTime.AddTicks(-amount);
+            }
+            return dateTime;
         }
 
         /// <summary>
@@ -740,7 +926,7 @@ namespace QuantConnect
             {
                 var genericArguments = type.GetGenericArguments();
                 var toBeReplaced = "`" + (genericArguments.Length);
-                name = name.Replace(toBeReplaced, "<" + string.Join(", ", genericArguments.Select(x => x.GetBetterTypeName())) + ">");
+                name = name.Replace(toBeReplaced, $"<{string.Join(", ", genericArguments.Select(x => x.GetBetterTypeName()))}>");
             }
             return name;
         }
@@ -787,7 +973,7 @@ namespace QuantConnect
                 if (Time.OneMinute == timeSpan) return Resolution.Minute;
                 if (Time.OneHour   == timeSpan) return Resolution.Hour;
                 if (Time.OneDay    == timeSpan) return Resolution.Daily;
-                throw new InvalidOperationException($"Unable to exactly convert time span ('{timeSpan}') to resolution.");
+                throw new InvalidOperationException(Invariant($"Unable to exactly convert time span ('{timeSpan}') to resolution."));
             }
 
             // for non-perfect matches
@@ -913,7 +1099,7 @@ namespace QuantConnect
             var matches = regx.Matches(source);
             foreach (Match match in matches)
             {
-                source = source.Replace(match.Value, "<a href='" + match.Value + "' target='blank'>" + match.Value + "</a>");
+                source = source.Replace(match.Value, $"<a href=\'{match.Value}\' target=\'blank\'>{match.Value}</a>");
             }
             return source;
         }
@@ -958,7 +1144,87 @@ namespace QuantConnect
         /// <returns>A lower-case string representation of the specified enumeration value</returns>
         public static string ToLower(this Enum @enum)
         {
-            return @enum.ToString().ToLower();
+            return @enum.ToString().ToLowerInvariant();
+        }
+
+        /// <summary>
+        /// Converts the specified <paramref name="securityType"/> value to its corresponding lower-case string representation
+        /// </summary>
+        /// <remarks>This method provides faster performance than <see cref="ToLower"/></remarks>
+        /// <param name="securityType">The SecurityType value</param>
+        /// <returns>A lower-case string representation of the specified SecurityType value</returns>
+        public static string SecurityTypeToLower(this SecurityType securityType)
+        {
+            switch (securityType)
+            {
+                case SecurityType.Base:
+                    return "base";
+                case SecurityType.Equity:
+                    return "equity";
+                case SecurityType.Option:
+                    return "option";
+                case SecurityType.Commodity:
+                    return "commodity";
+                case SecurityType.Forex:
+                    return "forex";
+                case SecurityType.Future:
+                    return "future";
+                case SecurityType.Cfd:
+                    return "cfd";
+                case SecurityType.Crypto:
+                    return "crypto";
+                default:
+                    // just in case
+                    return securityType.ToLower();
+            }
+        }
+
+        /// <summary>
+        /// Converts the specified <paramref name="tickType"/> value to its corresponding lower-case string representation
+        /// </summary>
+        /// <remarks>This method provides faster performance than <see cref="ToLower"/></remarks>
+        /// <param name="tickType">The tickType value</param>
+        /// <returns>A lower-case string representation of the specified tickType value</returns>
+        public static string TickTypeToLower(this TickType tickType)
+        {
+            switch (tickType)
+            {
+                case TickType.Trade:
+                    return "trade";
+                case TickType.Quote:
+                    return "quote";
+                case TickType.OpenInterest:
+                    return "openinterest";
+                default:
+                    // just in case
+                    return tickType.ToLower();
+            }
+        }
+
+        /// <summary>
+        /// Converts the specified <paramref name="resolution"/> value to its corresponding lower-case string representation
+        /// </summary>
+        /// <remarks>This method provides faster performance than <see cref="ToLower"/></remarks>
+        /// <param name="resolution">The resolution value</param>
+        /// <returns>A lower-case string representation of the specified resolution value</returns>
+        public static string ResolutionToLower(this Resolution resolution)
+        {
+            switch (resolution)
+            {
+                case Resolution.Tick:
+                    return "tick";
+                case Resolution.Second:
+                    return "second";
+                case Resolution.Minute:
+                    return "minute";
+                case Resolution.Hour:
+                    return "hour";
+                case Resolution.Daily:
+                    return "daily";
+                default:
+                    // just in case
+                    return resolution.ToLower();
+            }
         }
 
         /// <summary>
@@ -1032,25 +1298,31 @@ namespace QuantConnect
         {
             using (Py.GIL())
             {
+                var value = "";
                 // PyObject objects that have the to_string method, like some pandas objects,
                 // can use this method to convert them into string objects
                 if (pyObject.HasAttr("to_string"))
                 {
-                    return Environment.NewLine + pyObject.InvokeMethod("to_string").ToString();
+                    var pyValue = pyObject.InvokeMethod("to_string");
+                    value = Environment.NewLine + pyValue;
+                    pyValue.Dispose();
                 }
-
-                var value = pyObject.ToString();
-                if (string.IsNullOrWhiteSpace(value))
+                else
                 {
-                    var pythonType = pyObject.GetPythonType();
-                    if (pythonType.GetType() == typeof(PyObject))
+                    value = pyObject.ToString();
+                    if (string.IsNullOrWhiteSpace(value))
                     {
-                        value = pythonType.ToString();
-                    }
-                    else
-                    {
-                        var type = pythonType.As<Type>();
-                        value = pyObject.AsManagedObject(type).ToString();
+                        var pythonType = pyObject.GetPythonType();
+                        if (pythonType.GetType() == typeof(PyObject))
+                        {
+                            value = pythonType.ToString();
+                        }
+                        else
+                        {
+                            var type = pythonType.As<Type>();
+                            value = pyObject.AsManagedObject(type).ToString();
+                        }
+                        pythonType.Dispose();
                     }
                 }
                 return value;
@@ -1097,6 +1369,7 @@ namespace QuantConnect
 
                     if (!type.IsAssignableFrom(csharpType))
                     {
+                        pythonType.Dispose();
                         return false;
                     }
 
@@ -1105,7 +1378,8 @@ namespace QuantConnect
                     // If the PyObject type and the managed object names are the same,
                     // pyObject is a C# object wrapped in PyObject, in this case return true
                     // Otherwise, pyObject is a python object that subclass a C# class.
-                    string name = ((dynamic) pythonType).__name__;
+                    var name = (((dynamic) pythonType).__name__ as PyObject).GetAndDispose<string>();
+                    pythonType.Dispose();
                     return name == result.GetType().Name;
                 }
                 catch
@@ -1142,17 +1416,18 @@ namespace QuantConnect
             }
 
             var code = string.Empty;
-            var locals = new PyDict();
             var types = type.GetGenericArguments();
 
-            try
+            using (Py.GIL())
             {
-                using (Py.GIL())
+                var locals = new PyDict();
+                try
                 {
                     for (var i = 0; i < types.Length; i++)
                     {
-                        code += $",t{i}";
-                        locals.SetItem($"t{i}", types[i].ToPython());
+                        var iString = i.ToStringInvariant();
+                        code += $",t{iString}";
+                        locals.SetItem($"t{iString}", types[i].ToPython());
                     }
 
                     locals.SetItem("pyObject", pyObject);
@@ -1162,16 +1437,51 @@ namespace QuantConnect
 
                     PythonEngine.Exec(code, null, locals.Handle);
                     result = (T)locals.GetItem("delegate").AsManagedObject(typeof(T));
-
+                    locals.Dispose();
                     return true;
                 }
-            }
-            catch
-            {
-                // Do not throw or log the exception.
-                // Return false as an exception means that the conversion could not be made.
+                catch
+                {
+                    // Do not throw or log the exception.
+                    // Return false as an exception means that the conversion could not be made.
+                }
+                locals.Dispose();
             }
             return false;
+        }
+
+        /// <summary>
+        /// Wraps the provided universe selection selector checking if it returned <see cref="Universe.Unchanged"/>
+        /// and returns it instead, else enumerates result as <see cref="IEnumerable{Symbol}"/>
+        /// </summary>
+        /// <remarks>This method is a work around for the fact that currently we can not create a delegate which returns
+        /// an <see cref="IEnumerable{Symbol}"/> from a python method returning an array, plus the fact that
+        /// <see cref="Universe.Unchanged"/> can not be cast to an array</remarks>
+        public static Func<T, IEnumerable<Symbol>> ConvertToUniverseSelectionSymbolDelegate<T>(this Func<T, object> selector)
+        {
+            return data =>
+            {
+                var result = selector(data);
+                return ReferenceEquals(result, Universe.Unchanged)
+                    ? Universe.Unchanged : ((object[])result).Select(x => (Symbol)x);
+            };
+        }
+
+        /// <summary>
+        /// Wraps the provided universe selection selector checking if it returned <see cref="Universe.Unchanged"/>
+        /// and returns it instead, else enumerates result as <see cref="IEnumerable{String}"/>
+        /// </summary>
+        /// <remarks>This method is a work around for the fact that currently we can not create a delegate which returns
+        /// an <see cref="IEnumerable{String}"/> from a python method returning an array, plus the fact that
+        /// <see cref="Universe.Unchanged"/> can not be cast to an array</remarks>
+        public static Func<T, IEnumerable<string>> ConvertToUniverseSelectionStringDelegate<T>(this Func<T, object> selector)
+        {
+            return data =>
+            {
+                var result = selector(data);
+                return ReferenceEquals(result, Universe.Unchanged)
+                    ? Universe.Unchanged : ((object[])result).Select(x => (string)x);
+            };
         }
 
         /// <summary>
@@ -1194,6 +1504,92 @@ namespace QuantConnect
         }
 
         /// <summary>
+        /// Convert a <see cref="PyObject"/> into a managed dictionary
+        /// </summary>
+        /// <typeparam name="TKey">Target type of the resulting dictionary key</typeparam>
+        /// <typeparam name="TValue">Target type of the resulting dictionary value</typeparam>
+        /// <param name="pyObject">PyObject to be converted</param>
+        /// <returns>Dictionary of TValue keyed by TKey</returns>
+        public static Dictionary<TKey, TValue> ConvertToDictionary<TKey, TValue>(this PyObject pyObject)
+        {
+            var result = new List<KeyValuePair<TKey, TValue>>();
+            using (Py.GIL())
+            {
+                var inputType = pyObject.GetPythonType().ToString();
+                var targetType = nameof(PyDict);
+
+                try
+                {
+                    using (var pyDict = new PyDict(pyObject))
+                    {
+                        targetType = $"{typeof(TKey).Name}: {typeof(TValue).Name}";
+
+                        foreach (PyObject item in pyDict.Items())
+                        {
+                            inputType = $"{item[0].GetPythonType()}: {item[1].GetPythonType()}";
+
+                            var key = item[0].As<TKey>();
+                            var value = item[1].As<TValue>();
+
+                            result.Add(new KeyValuePair<TKey, TValue>(key, value));
+                        }
+                    }
+                }
+                catch (Exception e)
+                {
+                    throw new ArgumentException(
+                        $"ConvertToDictionary cannot be used to convert a {inputType} into {targetType}. Reason: {e.Message}",
+                        e
+                    );
+                }
+            }
+
+            return result.ToDictionary();
+        }
+
+        /// <summary>
+        /// Gets Enumerable of <see cref="Symbol"/> from a PyObject
+        /// </summary>
+        /// <param name="pyObject">PyObject containing Symbol or Array of Symbol</param>
+        /// <returns>Enumerable of Symbol</returns>
+        public static IEnumerable<Symbol> ConvertToSymbolEnumerable(this PyObject pyObject)
+        {
+            using (Py.GIL())
+            {
+                if (!PyList.IsListType(pyObject))
+                {
+                    pyObject = new PyList(new[] {pyObject});
+                }
+
+                foreach (PyObject item in pyObject)
+                {
+                    if (PyString.IsStringType(item))
+                    {
+                        yield return SymbolCache.GetSymbol(item.GetAndDispose<string>());
+                    }
+                    else
+                    {
+                        Symbol symbol;
+                        try
+                        {
+                            symbol = item.GetAndDispose<Symbol>();
+                        }
+                        catch (Exception e)
+                        {
+                            throw new ArgumentException(
+                                "Argument type should be Symbol or a list of Symbol. " +
+                                $"Object: {item}. Type: {item.GetPythonType()}",
+                                e
+                            );
+                        }
+
+                        yield return symbol;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
         /// Converts the numeric value of one or more enumerated constants to an equivalent enumerated string.
         /// </summary>
         /// <param name="value">Numeric value</param>
@@ -1204,7 +1600,7 @@ namespace QuantConnect
             Type type;
             if (pyObject.TryConvert(out type))
             {
-                return value.ToString().ConvertTo(type).ToString();
+                return value.ToStringInvariant().ConvertTo(type).ToString();
             }
             else
             {
@@ -1216,30 +1612,41 @@ namespace QuantConnect
         }
 
         /// <summary>
-        /// Destroys a PyObject
-        /// https://docs.python.org/2/reference/datamodel.html#object.__del__
+        /// Creates a type with a given name, if PyObject is not a CLR type. Otherwise, convert it.
         /// </summary>
-        /// <param name="pyObject">PyObject to be destroyed</param>
-        public static void Destroy(this PyObject pyObject)
+        /// <param name="pyObject">Python object representing a type.</param>
+        /// <returns>Type object</returns>
+        public static Type CreateType(this PyObject pyObject)
         {
-            try
+            Type type;
+            if (pyObject.TryConvert(out type) &&
+                type != typeof(PythonQuandl) &&
+                type != typeof(PythonData))
             {
-                if (pyObject.HasAttr("__del__"))
-                {
-                    pyObject.InvokeMethod("__del__");
-                }
+                return type;
             }
-            catch (PythonException e)
+
+            PythonActivator pythonType;
+            if (!PythonActivators.TryGetValue(pyObject.Handle, out pythonType))
             {
-                if (string.IsNullOrWhiteSpace(e.StackTrace))
+                AssemblyName an;
+                using (Py.GIL())
                 {
-                    throw new Exception($"{(pyObject as dynamic).__qualname__} returned a result with an undefined error set.");
+                    an = new AssemblyName(pyObject.Repr().Split('\'')[1]);
                 }
-                else
-                {
-                    throw e;
-                }
+                var typeBuilder = AppDomain.CurrentDomain
+                    .DefineDynamicAssembly(an, AssemblyBuilderAccess.Run)
+                    .DefineDynamicModule("MainModule")
+                    .DefineType(an.Name, TypeAttributes.Class, type);
+
+                pythonType = new PythonActivator(typeBuilder.CreateType(), pyObject);
+
+                ObjectActivator.AddActivator(pythonType.Type, pythonType.Factory);
+
+                // Save to prevent future additions
+                PythonActivators.Add(pyObject.Handle, pythonType);
             }
+            return pythonType.Type;
         }
 
         /// <summary>
@@ -1297,6 +1704,24 @@ namespace QuantConnect
         public static void SynchronouslyAwaitTask(this Task task)
         {
             task.ConfigureAwait(false).GetAwaiter().GetResult();
+        }
+
+        /// <summary>
+        /// Returns a new string in which specified ending in the current instance is removed.
+        /// </summary>
+        /// <param name="s">original string value</param>
+        /// <param name="ending">the string to be removed</param>
+        /// <returns></returns>
+        public static string RemoveFromEnd(this string s, string ending)
+        {
+            if (s.EndsWith(ending))
+            {
+                return s.Substring(0, s.Length - ending.Length);
+            }
+            else
+            {
+                return s;
+            }
         }
     }
 }

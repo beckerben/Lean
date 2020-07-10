@@ -82,7 +82,7 @@ namespace QuantConnect.Algorithm.CSharp
                 // we'll submit the next type of order from the queue
                 var orderType = _orderTypesQueue.Dequeue();
                 //Log("");
-                Log("\r\n--------------MONTH: " + Time.ToString("MMMM") + ":: " + orderType + "\r\n");
+                Log($"\r\n--------------MONTH: {Time.ToStringInvariant("MMMM")}:: {orderType}\r\n");
                 //Log("");
                 LastMonth = Time.Month;
                 Log("ORDER TYPE:: " + orderType);
@@ -168,7 +168,7 @@ namespace QuantConnect.Algorithm.CSharp
             else
             {
                 Log(orderEvent.ToString());
-                Log("TICKET:: " + _tickets.Last());
+                Log("TICKET:: " + ticket);
             }
         }
 
@@ -195,23 +195,43 @@ namespace QuantConnect.Algorithm.CSharp
         {
             {"Total Trades", "21"},
             {"Average Win", "0%"},
-            {"Average Loss", "-1.60%"},
-            {"Compounding Annual Return", "-7.774%"},
-            {"Drawdown", "15.700%"},
+            {"Average Loss", "-1.59%"},
+            {"Compounding Annual Return", "-7.737%"},
+            {"Drawdown", "15.800%"},
             {"Expectancy", "-1"},
-            {"Net Profit", "-14.944%"},
-            {"Sharpe Ratio", "-1.359"},
+            {"Net Profit", "-14.875%"},
+            {"Sharpe Ratio", "-1.224"},
+            {"Probabilistic Sharpe Ratio", "0.042%"},
             {"Loss Rate", "100%"},
             {"Win Rate", "0%"},
             {"Profit-Loss Ratio", "0"},
-            {"Alpha", "-0.074"},
-            {"Beta", "-0.27"},
-            {"Annual Standard Deviation", "0.058"},
+            {"Alpha", "-0.071"},
+            {"Beta", "0.035"},
+            {"Annual Standard Deviation", "0.053"},
             {"Annual Variance", "0.003"},
-            {"Information Ratio", "-1.701"},
-            {"Tracking Error", "0.058"},
-            {"Treynor Ratio", "0.293"},
-            {"Total Fees", "$21.00"}
+            {"Information Ratio", "-2.13"},
+            {"Tracking Error", "0.111"},
+            {"Treynor Ratio", "-1.824"},
+            {"Total Fees", "$21.00"},
+            {"Fitness Score", "0.002"},
+            {"Kelly Criterion Estimate", "-8.621"},
+            {"Kelly Criterion Probability Value", "0.818"},
+            {"Sortino Ratio", "-2.102"},
+            {"Return Over Maximum Drawdown", "-0.49"},
+            {"Portfolio Turnover", "0.006"},
+            {"Total Insights Generated", "21"},
+            {"Total Insights Closed", "20"},
+            {"Total Insights Analysis Completed", "20"},
+            {"Long Insight Count", "0"},
+            {"Short Insight Count", "19"},
+            {"Long/Short Ratio", "0%"},
+            {"Estimated Monthly Alpha Value", "$-3259975"},
+            {"Total Accumulated Estimated Alpha Value", "$-79348690"},
+            {"Mean Population Estimated Insight Value", "$-3967435"},
+            {"Mean Population Direction", "16.3743%"},
+            {"Mean Population Magnitude", "0%"},
+            {"Rolling Averaged Population Direction", "5.1168%"},
+            {"Rolling Averaged Population Magnitude", "0%"}
         };
     }
 }

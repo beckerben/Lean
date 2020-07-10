@@ -85,7 +85,7 @@ namespace QuantConnect.Algorithm.CSharp
             {
                 SetHoldings(data.Symbol, 1.0);
             }
-            Log($"CLOSE - {data.Time.ToString("o")} - {data.Open} {data.Close}");
+            Log($"CLOSE - {data.Time.ToIso8601Invariant()} - {data.Open} {data.Close}");
         }
 
         /// <summary>
@@ -98,7 +98,7 @@ namespace QuantConnect.Algorithm.CSharp
             {
                 Liquidate(data.Symbol);
             }
-            Log($"7BAR - {data.Time.ToString("o")} - {data.Open} {data.Close}");
+            Log($"7BAR - {data.Time.ToIso8601Invariant()} - {data.Open} {data.Close}");
         }
 
         /// <summary>
@@ -123,18 +123,38 @@ namespace QuantConnect.Algorithm.CSharp
             {"Drawdown", "11.000%"},
             {"Expectancy", "-0.058"},
             {"Net Profit", "-2.015%"},
-            {"Sharpe Ratio", "-0.161"},
+            {"Sharpe Ratio", "-0.146"},
+            {"Probabilistic Sharpe Ratio", "10.335%"},
             {"Loss Rate", "43%"},
             {"Win Rate", "57%"},
             {"Profit-Loss Ratio", "0.65"},
-            {"Alpha", "-0.179"},
-            {"Beta", "8.103"},
-            {"Annual Standard Deviation", "0.098"},
-            {"Annual Variance", "0.01"},
-            {"Information Ratio", "-0.368"},
-            {"Tracking Error", "0.097"},
-            {"Treynor Ratio", "-0.002"},
-            {"Total Fees", "$117.47"}
+            {"Alpha", "-0.013"},
+            {"Beta", "0"},
+            {"Annual Standard Deviation", "0.088"},
+            {"Annual Variance", "0.008"},
+            {"Information Ratio", "-0.973"},
+            {"Tracking Error", "0.145"},
+            {"Treynor Ratio", "-47.558"},
+            {"Total Fees", "$117.47"},
+            {"Fitness Score", "0.044"},
+            {"Kelly Criterion Estimate", "-1.573"},
+            {"Kelly Criterion Probability Value", "0.548"},
+            {"Sortino Ratio", "-0.215"},
+            {"Return Over Maximum Drawdown", "-0.182"},
+            {"Portfolio Turnover", "0.094"},
+            {"Total Insights Generated", "29"},
+            {"Total Insights Closed", "28"},
+            {"Total Insights Analysis Completed", "28"},
+            {"Long Insight Count", "15"},
+            {"Short Insight Count", "0"},
+            {"Long/Short Ratio", "100%"},
+            {"Estimated Monthly Alpha Value", "$-180220.1"},
+            {"Total Accumulated Estimated Alpha Value", "$-2199937"},
+            {"Mean Population Estimated Insight Value", "$-78569.18"},
+            {"Mean Population Direction", "66.0642%"},
+            {"Mean Population Magnitude", "0%"},
+            {"Rolling Averaged Population Direction", "87.366%"},
+            {"Rolling Averaged Population Magnitude", "0%"}
         };
     }
 }

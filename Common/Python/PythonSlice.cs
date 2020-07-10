@@ -34,8 +34,6 @@ namespace QuantConnect.Python
         {
             // Python Data class: Converts custom data (PythonData) into a python object'''
             _converter = PythonEngine.ModuleFromString("converter",
-                "import decimal\n" +
-
                 "class Data(object):\n" +
                 "    def __init__(self, data):\n" +
                 "        self.data = data\n" +
@@ -44,7 +42,7 @@ namespace QuantConnect.Python
                 "            setattr(self, member, getattr(data, member))\n" +
                 "        for kvp in data.GetStorageDictionary():\n" +
                 "           name = kvp.Key.replace('-',' ').replace('.',' ').title().replace(' ', '')\n" +
-                "           value = decimal.Decimal(kvp.Value) if isinstance(kvp.Value, float) else kvp.Value\n" +
+                "           value = kvp.Value if isinstance(kvp.Value, float) else kvp.Value\n" +
                 "           setattr(self, name, value)\n" +
 
                 "    def __str__(self):\n" +
@@ -71,6 +69,31 @@ namespace QuantConnect.Python
                 )
         {
             _slice = slice;
+        }
+
+        /// <summary>
+        /// Gets the data of the specified symbol and type.
+        /// </summary>
+        /// <param name="type">The type of data we seek</param>
+        /// <param name="symbol">The specific symbol was seek</param>
+        /// <returns>The data for the requested symbol</returns>
+        public dynamic Get(PyObject type, Symbol symbol)
+        {
+            return GetImpl(type.CreateType(), _slice)[symbol];
+        }
+
+        /// <summary>
+        /// Gets the data of the specified symbol and type.
+        /// </summary>
+        /// <param name="type">The type of data we seek</param>
+        /// <returns>The data for the requested symbol</returns>
+        public PyObject Get(PyObject type)
+        {
+            var result = GetImpl(type.CreateType(), _slice) as object;
+            using (Py.GIL())
+            {
+                return result.ToPython();
+            }
         }
 
         /// <summary>

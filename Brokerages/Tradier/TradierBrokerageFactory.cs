@@ -22,6 +22,7 @@ using QuantConnect.Configuration;
 using QuantConnect.Interfaces;
 using QuantConnect.Logging;
 using QuantConnect.Packets;
+using QuantConnect.Securities;
 using QuantConnect.Util;
 
 namespace QuantConnect.Brokerages.Tradier
@@ -112,7 +113,7 @@ namespace QuantConnect.Brokerages.Tradier
                 string accessToken, refreshToken, issuedAt, lifeSpan;
 
                 // always need to grab account ID from configuration
-                var accountID = Configuration.AccountID.ToString();
+                var accountID = Configuration.AccountID.ToStringInvariant();
                 var data = new Dictionary<string, string>();
                 if (File.Exists(TokensFile))
                 {
@@ -141,10 +142,8 @@ namespace QuantConnect.Brokerages.Tradier
         /// <summary>
         /// Gets a new instance of the <see cref="TradierBrokerageModel"/>
         /// </summary>
-        public override IBrokerageModel BrokerageModel
-        {
-            get { return new TradierBrokerageModel(); }
-        }
+        /// <param name="orderProvider">The order provider</param>
+        public override IBrokerageModel GetBrokerageModel(IOrderProvider orderProvider) => new TradierBrokerageModel();
 
         /// <summary>
         /// Creates a new IBrokerage instance

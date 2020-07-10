@@ -21,6 +21,8 @@ using QuantConnect.Orders.Fees;
 using QuantConnect.Orders.TimeInForces;
 using QuantConnect.Securities;
 using QuantConnect.Securities.Forex;
+using QuantConnect.Util;
+using static QuantConnect.StringExtensions;
 
 namespace QuantConnect.Brokerages
 {
@@ -29,6 +31,19 @@ namespace QuantConnect.Brokerages
     /// </summary>
     public class InteractiveBrokersBrokerageModel : DefaultBrokerageModel
     {
+        /// <summary>
+        /// The default markets for the IB brokerage
+        /// </summary>
+        public new static readonly IReadOnlyDictionary<SecurityType, string> DefaultMarketMap = new Dictionary<SecurityType, string>
+        {
+            {SecurityType.Base, Market.USA},
+            {SecurityType.Equity, Market.USA},
+            {SecurityType.Option, Market.USA},
+            {SecurityType.Future, Market.USA},
+            {SecurityType.Forex, Market.Oanda},
+            {SecurityType.Cfd, Market.Oanda}
+        }.ToReadOnlyDictionary();
+
         private readonly Type[] _supportedTimeInForces =
         {
             typeof(GoodTilCanceledTimeInForce),
@@ -45,6 +60,11 @@ namespace QuantConnect.Brokerages
             : base(accountType)
         {
         }
+
+        /// <summary>
+        /// Gets a map of the default markets to be used for each security type
+        /// </summary>
+        public override IReadOnlyDictionary<SecurityType, string> DefaultMarkets => DefaultMarketMap;
 
         /// <summary>
         /// Gets a new fee model that represents this brokerage's fee structure
@@ -78,7 +98,7 @@ namespace QuantConnect.Brokerages
                 security.Type != SecurityType.Future)
             {
                 message = new BrokerageMessageEvent(BrokerageMessageType.Warning, "NotSupported",
-                    $"The {nameof(InteractiveBrokersBrokerageModel)} does not support {security.Type} security type."
+                    Invariant($"The {nameof(InteractiveBrokersBrokerageModel)} does not support {security.Type} security type.")
                 );
 
                 return false;
@@ -96,7 +116,7 @@ namespace QuantConnect.Brokerages
             if (!_supportedTimeInForces.Contains(order.TimeInForce.GetType()))
             {
                 message = new BrokerageMessageEvent(BrokerageMessageType.Warning, "NotSupported",
-                    $"The {nameof(InteractiveBrokersBrokerageModel)} does not support {order.TimeInForce.GetType().Name} time in force."
+                    Invariant($"The {nameof(InteractiveBrokersBrokerageModel)} does not support {order.TimeInForce.GetType().Name} time in force.")
                 );
 
                 return false;
@@ -182,7 +202,7 @@ namespace QuantConnect.Brokerages
             if (!orderIsWithinForexSizeLimits)
             {
                 message = new BrokerageMessageEvent(BrokerageMessageType.Warning, "OrderSizeLimit",
-                    $"The maximum allowable order size is {max}{baseCurrency}."
+                    Invariant($"The maximum allowable order size is {max}{baseCurrency}.")
                 );
             }
             return orderIsWithinForexSizeLimits;

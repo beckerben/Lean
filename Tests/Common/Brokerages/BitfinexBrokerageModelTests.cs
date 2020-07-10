@@ -13,6 +13,7 @@
  * limitations under the License.
 */
 
+using System;
 using NUnit.Framework;
 using QuantConnect.Brokerages;
 using QuantConnect.Data;
@@ -43,7 +44,9 @@ namespace QuantConnect.Tests.Common.Brokerages
                     ),
                     new Cash(Currencies.USD, 0, 1m),
                     SymbolProperties.GetDefault(Currencies.USD),
-                    ErrorCurrencyConverter.Instance
+                    ErrorCurrencyConverter.Instance,
+                    RegisteredSecurityDataTypesProvider.Null,
+                    new SecurityCache()
                 );
             }
         }
@@ -62,6 +65,58 @@ namespace QuantConnect.Tests.Common.Brokerages
             BitfinexBrokerageModel model = new BitfinexBrokerageModel(AccountType.Margin);
             Assert.IsInstanceOf<SecurityMarginModel>(model.GetBuyingPowerModel(Security));
             Assert.AreEqual(3.3M, model.GetLeverage(Security));
+        }
+
+        [Test]
+        public void GetEquityLeverage_ThrowsArgumentException_Test()
+        {
+            var equity = new Security(
+                SecurityExchangeHours.AlwaysOpen(TimeZones.NewYork),
+                new SubscriptionDataConfig(
+                    typeof(TradeBar),
+                    Symbols.SPY,
+                    Resolution.Minute,
+                    TimeZones.NewYork,
+                    TimeZones.NewYork,
+                    false,
+                    false,
+                    false
+                ),
+                new Cash(Currencies.USD, 0, 1m),
+                SymbolProperties.GetDefault(Currencies.USD),
+                ErrorCurrencyConverter.Instance,
+                RegisteredSecurityDataTypesProvider.Null,
+                new SecurityCache()
+            );
+
+            var model = new BitfinexBrokerageModel();
+            Assert.Throws<ArgumentException>(() => model.GetLeverage(equity));
+        }
+
+        [Test]
+        public void GetCustomDataLeverageTest()
+        {
+            var dummy = new Security(
+                SecurityExchangeHours.AlwaysOpen(TimeZones.NewYork),
+                new SubscriptionDataConfig(
+                    typeof(TradeBar),
+                    QuantConnect.Symbol.Create("DUMMY", SecurityType.Base, Market.Bitfinex),
+                    Resolution.Minute,
+                    TimeZones.NewYork,
+                    TimeZones.NewYork,
+                    false,
+                    false,
+                    false
+                ),
+                new Cash(Currencies.USD, 0, 1m),
+                SymbolProperties.GetDefault(Currencies.USD),
+                ErrorCurrencyConverter.Instance,
+                RegisteredSecurityDataTypesProvider.Null,
+                new SecurityCache()
+            );
+
+            var model = new BitfinexBrokerageModel();
+            Assert.AreEqual(1M, model.GetLeverage(dummy));
         }
     }
 }

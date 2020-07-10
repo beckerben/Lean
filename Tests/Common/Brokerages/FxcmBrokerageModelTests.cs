@@ -53,6 +53,11 @@ namespace QuantConnect.Tests.Common.Brokerages
         private Security CreateSecurity(Symbol symbol)
         {
             var quoteCurrency = symbol.Value.Substring(symbol.Value.Length - 3);
+            var properties = _symbolPropertiesDatabase.GetSymbolProperties(
+                symbol.ID.Market,
+                symbol,
+                symbol.SecurityType,
+                quoteCurrency);
 
             return new Security(
                 SecurityExchangeHours.AlwaysOpen(TimeZones.NewYork),
@@ -66,9 +71,11 @@ namespace QuantConnect.Tests.Common.Brokerages
                     false,
                     false
                 ),
-                new Cash(quoteCurrency, 0, 1m),
-                _symbolPropertiesDatabase.GetSymbolProperties(symbol.ID.Market, symbol, symbol.SecurityType, quoteCurrency),
-                ErrorCurrencyConverter.Instance
+                new Cash(symbol.SecurityType == SecurityType.Equity ? properties.QuoteCurrency : quoteCurrency, 0, 1m),
+                properties,
+                ErrorCurrencyConverter.Instance,
+                RegisteredSecurityDataTypesProvider.Null,
+                new SecurityCache()
             );
         }
 

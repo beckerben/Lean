@@ -18,6 +18,7 @@ using System;
 using System.IO;
 using QuantConnect.Data;
 using QuantConnect.Interfaces;
+using QuantConnect.Logging;
 
 namespace QuantConnect.Lean.Engine.DataFeeds
 {
@@ -34,23 +35,47 @@ namespace QuantConnect.Lean.Engine.DataFeeds
         /// <param name="config">The configuration of the subscription</param>
         /// <param name="date">The date to be processed</param>
         /// <param name="isLiveMode">True for live mode, false otherwise</param>
+        /// <param name="factory">The base data instance factory</param>
         /// <returns>A new <see cref="ISubscriptionDataSourceReader"/> that can read the specified <paramref name="source"/></returns>
-        public static ISubscriptionDataSourceReader ForSource(SubscriptionDataSource source, IDataCacheProvider dataCacheProvider, SubscriptionDataConfig config, DateTime date, bool isLiveMode)
+        public static ISubscriptionDataSourceReader ForSource(SubscriptionDataSource source, IDataCacheProvider dataCacheProvider, SubscriptionDataConfig config, DateTime date, bool isLiveMode, BaseData factory)
         {
+            ISubscriptionDataSourceReader reader;
+            TextSubscriptionDataSourceReader textReader = null;
             switch (source.Format)
             {
                 case FileFormat.Csv:
-                    return new TextSubscriptionDataSourceReader(dataCacheProvider, config, date, isLiveMode);
+                    reader = textReader = new TextSubscriptionDataSourceReader(dataCacheProvider, config, date, isLiveMode);
+                    break;
 
                 case FileFormat.Collection:
-                    return new CollectionSubscriptionDataSourceReader(dataCacheProvider, config, date, isLiveMode);
+                    reader = new CollectionSubscriptionDataSourceReader(dataCacheProvider, config, date, isLiveMode);
+                    break;
 
                 case FileFormat.ZipEntryName:
-                    return new ZipEntryNameSubscriptionDataSourceReader(config, date, isLiveMode);
+                    reader = new ZipEntryNameSubscriptionDataSourceReader(config, date, isLiveMode);
+                    break;
+
+                case FileFormat.Index:
+                    return new IndexSubscriptionDataSourceReader(dataCacheProvider, config, date, isLiveMode);
 
                 default:
                     throw new NotImplementedException("SubscriptionFactory.ForSource(" + source + ") has not been implemented yet.");
             }
+
+            // wire up event handlers for logging missing files
+            if (source.TransportMedium == SubscriptionTransportMedium.LocalFile)
+            {
+                if (!factory.IsSparseData())
+                {
+                    reader.InvalidSource += (sender, args) => Log.Error($"SubscriptionDataSourceReader.InvalidSource(): File not found: {args.Source.Source}");
+                    if (textReader != null)
+                    {
+                        textReader.CreateStreamReaderError += (sender, args) => Log.Error($"SubscriptionDataSourceReader.CreateStreamReaderError(): File not found: {args.Source.Source}");
+                    }
+                }
+            }
+
+            return reader;
         }
 
         /// <summary>

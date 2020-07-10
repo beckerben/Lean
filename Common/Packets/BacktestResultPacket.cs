@@ -158,7 +158,7 @@ namespace QuantConnect.Packets
             }
             catch (Exception err)
             {
-                Log.Trace("BacktestResultPacket(): Error converting json: " + err);
+                Log.Trace($"BacktestResultPacket(): Error converting json: {err}");
             }
         }
 
@@ -168,16 +168,18 @@ namespace QuantConnect.Packets
         /// </summary>
         /// <param name="job">Job that started this request</param>
         /// <param name="results">Results class for the Backtest job</param>
+        /// <param name="endDate">The algorithms backtest end date</param>
+        /// <param name="startDate">The algorithms backtest start date</param>
         /// <param name="progress">Progress of the packet. For the packet we assume progess of 100%.</param>
-        public BacktestResultPacket(BacktestNodePacket job, BacktestResult results, decimal progress = 1m)
+        public BacktestResultPacket(BacktestNodePacket job, BacktestResult results, DateTime endDate, DateTime startDate, decimal progress = 1m)
             : base(PacketType.BacktestResult)
         {
             try
             {
                 Progress = Math.Round(progress, 3);
                 SessionId = job.SessionId;
-                PeriodFinish = job.PeriodFinish;
-                PeriodStart = job.PeriodStart;
+                PeriodFinish = endDate;
+                PeriodStart = startDate;
                 CompileId = job.CompileId;
                 Channel = job.Channel;
                 BacktestId = job.BacktestId;
@@ -222,9 +224,8 @@ namespace QuantConnect.Packets
         /// <summary>
         /// Constructor for the result class using dictionary objects.
         /// </summary>
-        public BacktestResult(bool isFrameworkAlgorithm, IDictionary<string, Chart> charts, IDictionary<int, Order> orders, IDictionary<DateTime, decimal> profitLoss, IDictionary<string, string> statistics, IDictionary<string, string> runtimeStatistics, Dictionary<string, AlgorithmPerformance> rollingWindow, AlgorithmPerformance totalPerformance = null)
+        public BacktestResult(IDictionary<string, Chart> charts, IDictionary<int, Order> orders, IDictionary<DateTime, decimal> profitLoss, IDictionary<string, string> statistics, IDictionary<string, string> runtimeStatistics, Dictionary<string, AlgorithmPerformance> rollingWindow, AlgorithmPerformance totalPerformance = null)
         {
-            IsFrameworkAlgorithm = isFrameworkAlgorithm;
             Charts = charts;
             Orders = orders;
             ProfitLoss = profitLoss;

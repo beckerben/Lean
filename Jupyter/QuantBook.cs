@@ -33,6 +33,8 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using QuantConnect.Logging;
+using QuantConnect.Packets;
 
 namespace QuantConnect.Jupyter
 {
@@ -43,6 +45,12 @@ namespace QuantConnect.Jupyter
     {
         private dynamic _pandas;
         private IDataCacheProvider _dataCacheProvider;
+
+        static QuantBook()
+        {
+            Logging.Log.LogHandler =
+                Composer.Instance.GetExportedValueByTypeName<ILogHandler>(Config.Get("log-handler", "CompositeLogHandler"));
+        }
 
         /// <summary>
         /// <see cref = "QuantBook" /> constructor.
@@ -66,17 +74,34 @@ namespace QuantConnect.Jupyter
                 // Initialize History Provider
                 var composer = new Composer();
                 var algorithmHandlers = LeanEngineAlgorithmHandlers.FromConfiguration(composer);
+                var systemHandlers = LeanEngineSystemHandlers.FromConfiguration(composer);
+                // init the API
+                systemHandlers.Initialize();
+                systemHandlers.LeanManager.Initialize(systemHandlers,
+                    algorithmHandlers,
+                    new BacktestNodePacket(),
+                    new AlgorithmManager(false));
+                systemHandlers.LeanManager.SetAlgorithm(this);
+
                 _dataCacheProvider = new ZipDataCacheProvider(algorithmHandlers.DataProvider);
 
                 var symbolPropertiesDataBase = SymbolPropertiesDatabase.FromDataFolder();
-                var securityService = new SecurityService(Portfolio.CashBook, MarketHoursDatabase, symbolPropertiesDataBase, this);
+                var registeredTypes = new RegisteredSecurityDataTypesProvider();
+                var securityService = new SecurityService(Portfolio.CashBook,
+                    MarketHoursDatabase,
+                    symbolPropertiesDataBase,
+                    this,
+                    registeredTypes,
+                    new SecurityCacheProvider(Portfolio));
                 Securities.SetSecurityService(securityService);
                 SubscriptionManager.SetDataManager(
                     new DataManager(new NullDataFeed(),
                         new UniverseSelection(this, securityService),
                         this,
                         TimeKeeper,
-                        MarketHoursDatabase));
+                        MarketHoursDatabase,
+                        false,
+                        registeredTypes));
 
                 var mapFileProvider = algorithmHandlers.MapFileProvider;
                 HistoryProvider = composer.GetExportedValueByTypeName<IHistoryProvider>(Config.Get("history-provider", "SubscriptionDataReaderHistoryProvider"));
@@ -88,7 +113,8 @@ namespace QuantConnect.Jupyter
                         _dataCacheProvider,
                         mapFileProvider,
                         algorithmHandlers.FactorFileProvider,
-                        null
+                        null,
+                        true
                     )
                 );
 
@@ -131,7 +157,7 @@ namespace QuantConnect.Jupyter
                 foreach (var ticker in tickers)
                 {
                     var symbol = QuantConnect.Symbol.Create(ticker.ToString(), SecurityType.Equity, Market.USA);
-                    var dir = new DirectoryInfo(Path.Combine(Globals.DataFolder, "equity", symbol.ID.Market, "fundamental", "fine", symbol.Value.ToLower()));
+                    var dir = new DirectoryInfo(Path.Combine(Globals.DataFolder, "equity", symbol.ID.Market, "fundamental", "fine", symbol.Value.ToLowerInvariant()));
                     if (!dir.Exists) continue;
 
                     var config = new SubscriptionDataConfig(typeof(FineFundamental), symbol, Resolution.Daily, TimeZones.NewYork, TimeZones.NewYork, false, false, false);
@@ -164,33 +190,47 @@ namespace QuantConnect.Jupyter
         /// Gets <see cref="OptionHistory"/> object for a given symbol, date and resolution
         /// </summary>
         /// <param name="symbol">The symbol to retrieve historical option data for</param>
-        /// <param name="date">Date of the data</param>
+        /// <param name="start">The history request start time</param>
+        /// <param name="end">The history request end time. Defaults to 1 day if null</param>
         /// <param name="resolution">The resolution to request</param>
         /// <returns>A <see cref="OptionHistory"/> object that contains historical option data.</returns>
         public OptionHistory GetOptionHistory(Symbol symbol, DateTime start, DateTime? end = null, Resolution? resolution = null)
         {
-            if (!end.HasValue || end.Value.Date == start.Date)
+            if (!end.HasValue || end.Value == start)
             {
                 end = start.AddDays(1);
             }
 
-            var option = Securities[symbol] as Option;
-            var resolutionToUseForUnderlying = resolution ?? SubscriptionManager.SubscriptionDataConfigService
-                .GetSubscriptionDataConfigs(symbol)
-                .GetHighestResolution();
-            var underlying = AddEquity(symbol.Underlying.Value, resolutionToUseForUnderlying);
-
-            var allSymbols = new List<Symbol>();
-            for (var date = start; date < end; date = date.AddDays(1))
+            IEnumerable<Symbol> symbols;
+            if (symbol.IsCanonical())
             {
-                if (option.Exchange.DateIsOpen(date))
+                // canonical symbol, lets find the contracts
+                var option = Securities[symbol] as Option;
+                var resolutionToUseForUnderlying = resolution ?? SubscriptionManager.SubscriptionDataConfigService
+                                                       .GetSubscriptionDataConfigs(symbol)
+                                                       .GetHighestResolution();
+                if (!Securities.ContainsKey(symbol.Underlying))
                 {
-                    allSymbols.AddRange(OptionChainProvider.GetOptionContractList(symbol.Underlying, date));
+                    // only add underlying if not present
+                    AddEquity(symbol.Underlying.Value, resolutionToUseForUnderlying);
                 }
+                var allSymbols = new List<Symbol>();
+                for (var date = start; date < end; date = date.AddDays(1))
+                {
+                    if (option.Exchange.DateIsOpen(date))
+                    {
+                        allSymbols.AddRange(OptionChainProvider.GetOptionContractList(symbol.Underlying, date));
+                    }
+                }
+                symbols = base.History(symbol.Underlying, start, end.Value, resolution)
+                    .SelectMany(x => option.ContractFilter.Filter(new OptionFilterUniverse(allSymbols.Distinct(), x)))
+                    .Distinct().Concat(new[] { symbol.Underlying });
             }
-            var symbols = base.History(symbol.Underlying, start, end.Value, resolution)
-                .SelectMany(x => option.ContractFilter.Filter(new OptionFilterUniverse(allSymbols.Distinct(), x)))
-                .Distinct().Concat(new[] { symbol.Underlying });
+            else
+            {
+                // the symbol is a contract
+                symbols = new List<Symbol>{ symbol };
+            }
 
             return new OptionHistory(History(symbols, start, end.Value, resolution));
         }
@@ -199,29 +239,38 @@ namespace QuantConnect.Jupyter
         /// Gets <see cref="FutureHistory"/> object for a given symbol, date and resolution
         /// </summary>
         /// <param name="symbol">The symbol to retrieve historical future data for</param>
-        /// <param name="start">Date of the data</param>
+        /// <param name="start">The history request start time</param>
+        /// <param name="end">The history request end time. Defaults to 1 day if null</param>
         /// <param name="resolution">The resolution to request</param>
         /// <returns>A <see cref="FutureHistory"/> object that contains historical future data.</returns>
         public FutureHistory GetFutureHistory(Symbol symbol, DateTime start, DateTime? end = null, Resolution? resolution = null)
         {
-            if (!end.HasValue || end.Value.Date == start.Date)
+            if (!end.HasValue || end.Value == start)
             {
                 end = start.AddDays(1);
             }
 
-            var future = Securities[symbol] as Future;
-
-            var allSymbols = new List<Symbol>();
-            for (var date = start; date < end; date = date.AddDays(1))
+            var allSymbols = new HashSet<Symbol>();
+            if (symbol.IsCanonical())
             {
-                if (future.Exchange.DateIsOpen(date))
+                // canonical symbol, lets find the contracts
+                var future = Securities[symbol] as Future;
+
+                for (var date = start; date < end; date = date.AddDays(1))
                 {
-                    allSymbols.AddRange(FutureChainProvider.GetFutureContractList(future.Symbol, date));
+                    if (future.Exchange.DateIsOpen(date))
+                    {
+                        allSymbols.UnionWith(FutureChainProvider.GetFutureContractList(future.Symbol, date));
+                    }
                 }
             }
-            var symbols = allSymbols.Distinct();
+            else
+            {
+                // the symbol is a contract
+                allSymbols.Add(symbol);
+            }
 
-            return new FutureHistory(History(symbols, start, end.Value, resolution));
+            return new FutureHistory(History(allSymbols, start, end.Value, resolution));
         }
 
         /// <summary>

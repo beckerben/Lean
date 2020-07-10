@@ -140,7 +140,7 @@ namespace QuantConnect.Brokerages.Backtesting
                     SetPendingOrder(order);
                 }
 
-                var orderId = order.Id.ToString();
+                var orderId = order.Id.ToStringInvariant();
                 if (!order.BrokerId.Contains(orderId)) order.BrokerId.Add(orderId);
 
                 // fire off the event that says this order has been submitted
@@ -180,7 +180,7 @@ namespace QuantConnect.Brokerages.Backtesting
                 SetPendingOrder(order);
             }
 
-            var orderId = order.Id.ToString();
+            var orderId = order.Id.ToStringInvariant();
             if (!order.BrokerId.Contains(orderId)) order.BrokerId.Add(orderId);
 
             // fire off the event that says this order has been updated
@@ -215,8 +215,8 @@ namespace QuantConnect.Brokerages.Backtesting
                 }
             }
 
-            var orderId = order.Id.ToString();
-            if (!order.BrokerId.Contains(orderId)) order.BrokerId.Add(order.Id.ToString());
+            var orderId = order.Id.ToStringInvariant();
+            if (!order.BrokerId.Contains(orderId)) order.BrokerId.Add(order.Id.ToStringInvariant());
 
             // fire off the event that says this order has been canceled
             var canceled = new OrderEvent(order,
@@ -290,6 +290,21 @@ namespace QuantConnect.Brokerages.Backtesting
                         continue;
                     }
 
+                    if (order.Type == OrderType.MarketOnOpen)
+                    {
+                        // This is a performance improvement:
+                        // Since MOO should never fill on the same bar or on stale data (see FillModel)
+                        // the order can remain unfilled for multiple 'scans', so we want to avoid
+                        // margin and portfolio calculations since they are expensive
+                        var currentBar = security.GetLastData();
+                        var localOrderTime = order.Time.ConvertFromUtc(security.Exchange.TimeZone);
+                        if (currentBar == null || localOrderTime >= currentBar.EndTime)
+                        {
+                            stillNeedsScan = true;
+                            continue;
+                        }
+                    }
+
                     // check if the time in force handler allows fills
                     if (order.TimeInForce.IsOrderExpired(security, order))
                     {
@@ -351,7 +366,8 @@ namespace QuantConnect.Brokerages.Backtesting
                                 var context = new FillModelParameters(
                                     security,
                                     order,
-                                    Algorithm.SubscriptionManager.SubscriptionDataConfigService);
+                                    Algorithm.SubscriptionManager.SubscriptionDataConfigService,
+                                    Algorithm.Settings.StalePriceTimeSpan);
                                 fills = new[] { model.Fill(context).OrderEvent };
                             }
 
@@ -405,6 +421,11 @@ namespace QuantConnect.Brokerages.Backtesting
                         // change in status or a new fill
                         if (order.Status != fill.Status || fill.FillQuantity != 0)
                         {
+                            // we update the order status so we do not re process it if we re enter
+                            // because of the call to OnOrderEvent.
+                            // Note: this is done by the transaction handler but we have a clone of the order
+                            order.Status = fill.Status;
+
                             //If the fill models come back suggesting filled, process the affects on portfolio
                             OnOrderEvent(fill);
                         }
@@ -426,8 +447,9 @@ namespace QuantConnect.Brokerages.Backtesting
                     }
                 }
 
-                // if we didn't fill then we need to continue to scan
-                _needsScan = stillNeedsScan;
+                // if we didn't fill then we need to continue to scan or
+                // if there are still pending orders
+                _needsScan = stillNeedsScan || !_pending.IsEmpty;
             }
         }
 

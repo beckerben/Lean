@@ -58,15 +58,17 @@ class MeanVarianceOptimizationPortfolioConstructionModel(PortfolioConstructionMo
         Create portfolio targets from the specified insights
         Args:
             algorithm: The algorithm instance
-            insights: The insights to create portoflio targets from
+            insights: The insights to create portfolio targets from
         Returns:
-            An enumerable of portoflio targets to be sent to the execution model
+            An enumerable of portfolio targets to be sent to the execution model
         """
         targets = []
 
         for symbol in self.pendingRemoval:
             targets.append(PortfolioTarget.Percent(algorithm, symbol, 0))
         self.pendingRemoval.clear()
+
+        insights = PortfolioConstructionModel.FilterInvalidInsightMagnitude(algorithm, insights)
 
         symbols = [insight.Symbol for insight in insights]
         if len(symbols) == 0 or all([insight.Magnitude == 0 for insight in insights]):

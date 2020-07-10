@@ -47,42 +47,46 @@ namespace QuantConnect.Algorithm.Framework.Execution
         /// </summary>
         /// <param name="algorithm">The algorithm instance</param>
         /// <param name="targets">The portfolio targets to be ordered</param>
-        public override void Execute(QCAlgorithmFramework algorithm, IPortfolioTarget[] targets)
+        public override void Execute(QCAlgorithm algorithm, IPortfolioTarget[] targets)
         {
             // update the complete set of portfolio targets with the new targets
             _targetsCollection.AddRange(targets);
 
-            foreach (var target in _targetsCollection.OrderByMarginImpact(algorithm))
+            // for performance we check count value, OrderByMarginImpact and ClearFulfilled are expensive to call
+            if (_targetsCollection.Count > 0)
             {
-                var symbol = target.Symbol;
-
-                // calculate remaining quantity to be ordered
-                var unorderedQuantity = OrderSizing.GetUnorderedQuantity(algorithm, target);
-
-                // fetch our symbol data containing our VWAP indicator
-                SymbolData data;
-                if (!_symbolData.TryGetValue(symbol, out data))
+                foreach (var target in _targetsCollection.OrderByMarginImpact(algorithm))
                 {
-                    continue;
-                }
+                    var symbol = target.Symbol;
 
-                // check order entry conditions
-                if (PriceIsFavorable(data, unorderedQuantity))
-                {
-                    // get the maximum order size based on a percentage of current volume
-                    var maxOrderSize = OrderSizing.PercentVolume(data.Security, MaximumOrderQuantityPercentVolume);
-                    var orderSize = Math.Min(maxOrderSize, Math.Abs(unorderedQuantity));
+                    // calculate remaining quantity to be ordered
+                    var unorderedQuantity = OrderSizing.GetUnorderedQuantity(algorithm, target);
 
-                    // round down to even lot size
-                    orderSize -= orderSize % data.Security.SymbolProperties.LotSize;
-                    if (orderSize != 0)
+                    // fetch our symbol data containing our VWAP indicator
+                    SymbolData data;
+                    if (!_symbolData.TryGetValue(symbol, out data))
                     {
-                        algorithm.MarketOrder(data.Security.Symbol, Math.Sign(unorderedQuantity) * orderSize);
+                        continue;
+                    }
+
+                    // check order entry conditions
+                    if (PriceIsFavorable(data, unorderedQuantity))
+                    {
+                        // get the maximum order size based on a percentage of current volume
+                        var maxOrderSize = OrderSizing.PercentVolume(data.Security, MaximumOrderQuantityPercentVolume);
+                        var orderSize = Math.Min(maxOrderSize, Math.Abs(unorderedQuantity));
+
+                        // round down to even lot size
+                        orderSize -= orderSize % data.Security.SymbolProperties.LotSize;
+                        if (orderSize != 0)
+                        {
+                            algorithm.MarketOrder(data.Security.Symbol, Math.Sign(unorderedQuantity) * orderSize);
+                        }
                     }
                 }
-            }
 
-            _targetsCollection.ClearFulfilled(algorithm);
+                _targetsCollection.ClearFulfilled(algorithm);
+            }
         }
 
         /// <summary>
@@ -90,7 +94,7 @@ namespace QuantConnect.Algorithm.Framework.Execution
         /// </summary>
         /// <param name="algorithm">The algorithm instance that experienced the change in securities</param>
         /// <param name="changes">The security additions and removals from the algorithm</param>
-        public override void OnSecuritiesChanged(QCAlgorithmFramework algorithm, SecurityChanges changes)
+        public override void OnSecuritiesChanged(QCAlgorithm algorithm, SecurityChanges changes)
         {
             foreach (var added in changes.AddedSecurities)
             {
@@ -118,7 +122,7 @@ namespace QuantConnect.Algorithm.Framework.Execution
         /// <summary>
         /// Determines if it's safe to remove the associated symbol data
         /// </summary>
-        protected virtual bool IsSafeToRemove(QCAlgorithmFramework algorithm, Symbol symbol)
+        protected virtual bool IsSafeToRemove(QCAlgorithm algorithm, Symbol symbol)
         {
             // confirm the security isn't currently a member of any universe
             return !algorithm.UniverseManager.Any(kvp => kvp.Value.ContainsMember(symbol));
@@ -153,7 +157,7 @@ namespace QuantConnect.Algorithm.Framework.Execution
             public IntradayVwap VWAP { get; }
             public IDataConsolidator Consolidator { get; }
 
-            public SymbolData(QCAlgorithmFramework algorithm, Security security)
+            public SymbolData(QCAlgorithm algorithm, Security security)
             {
                 Security = security;
                 Consolidator = algorithm.ResolveConsolidator(security.Symbol, security.Resolution);

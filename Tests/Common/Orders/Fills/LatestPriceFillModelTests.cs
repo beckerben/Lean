@@ -127,7 +127,9 @@ namespace QuantConnect.Tests.Common.Orders.Fills
                 ),
                 new Cash(Currencies.USD, 0, 1m),
                 SymbolProperties.GetDefault(Currencies.USD),
-                ErrorCurrencyConverter.Instance
+                ErrorCurrencyConverter.Instance,
+                RegisteredSecurityDataTypesProvider.Null,
+                new SecurityCache()
             );
         }
 
@@ -136,7 +138,7 @@ namespace QuantConnect.Tests.Common.Orders.Fills
             public TestableLatestFillModel()
             {
                 // NOTE. GetPrices will no be called before SubscriptionDataConfigProvider is set by the system
-                Parameters = new FillModelParameters(null, null, new MockSubscriptionDataConfigProvider());
+                Parameters = new FillModelParameters(null, null, new MockSubscriptionDataConfigProvider(), Time.OneHour);
             }
             public new Prices GetPrices(Security asset, OrderDirection direction)
             {

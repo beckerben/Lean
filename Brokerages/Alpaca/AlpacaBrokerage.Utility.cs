@@ -31,32 +31,28 @@ namespace QuantConnect.Brokerages.Alpaca
     /// </summary>
     public partial class AlpacaBrokerage
     {
+
         /// <summary>
-        /// Retrieves the current rate for each of a list of instruments
+        /// Retrieves the current quotes for an instrument
         /// </summary>
-        /// <param name="instruments">the list of instruments to check</param>
-        /// <returns>Dictionary containing the current quotes for each instrument</returns>
-        private Dictionary<string, Tick> GetRates(IEnumerable<string> instruments)
+        /// <param name="instrument">the instrument to check</param>
+        /// <returns>Returns a Tick object with the current bid/ask prices for the instrument</returns>
+        public Tick GetRates(string instrument)
         {
             CheckRateLimiting();
 
-            var task = _restClient.ListQuotesAsync(instruments);
+            var task = _restClient.GetLastQuoteAsync(instrument);
             var response = task.SynchronouslyAwaitTaskResult();
 
-            return response
-                .ToDictionary(
-                    x => x.Symbol,
-                    x => new Tick
-                    {
-                        Symbol = Symbol.Create(x.Symbol, SecurityType.Equity, Market.USA),
-                        BidPrice = x.BidPrice,
-                        AskPrice = x.AskPrice,
-                        Time = x.LastTime,
-                        TickType = TickType.Quote
-                    }
-                );
+            return new Tick
+            {
+                Symbol = Symbol.Create(response.Symbol, SecurityType.Equity, Market.USA),
+                BidPrice = response.BidPrice,
+                AskPrice = response.AskPrice,
+                Time = response.Time,
+                TickType = TickType.Quote
+            };
         }
-
         private IOrder GenerateAndPlaceOrder(Order order)
         {
             var quantity = (long)order.Quantity;
@@ -116,18 +112,26 @@ namespace QuantConnect.Brokerages.Alpaca
             Log.Trace($"AlpacaBrokerage.OnTradeUpdate(): Event:{trade.Event} OrderId:{trade.Order.OrderId} OrderStatus:{trade.Order.OrderStatus} FillQuantity: {trade.Order.FilledQuantity} Price: {trade.Price}");
 
             Order order;
+            OrderTicket ticket = null;
             lock (_locker)
             {
                 order = _orderProvider.GetOrderByBrokerageId(trade.Order.OrderId.ToString());
+                if (order != null)
+                {
+                    ticket = _orderProvider.GetOrderTicket(order.Id);
+                }
             }
 
-            if (order != null)
+            if (order != null && ticket != null)
             {
-                if (trade.Event == TradeUpdateEvent.OrderFilled || trade.Event == TradeUpdateEvent.OrderPartiallyFilled)
+                if (trade.Event == TradeEvent.Fill || trade.Event == TradeEvent.PartialFill)
                 {
                     order.PriceCurrency = _securityProvider.GetSecurity(order.Symbol).SymbolProperties.QuoteCurrency;
 
-                    var status = trade.Event == TradeUpdateEvent.OrderFilled ? OrderStatus.Filled : OrderStatus.PartiallyFilled;
+                    var status = trade.Event == TradeEvent.Fill ? OrderStatus.Filled : OrderStatus.PartiallyFilled;
+
+                    // The Alpaca API does not return the individual quantity for each partial fill, but the cumulative filled quantity
+                    var fillQuantity = trade.Order.FilledQuantity - Math.Abs(ticket.QuantityFilled);
 
                     OnOrderEvent(new OrderEvent(order,
                         DateTime.UtcNow,
@@ -136,17 +140,17 @@ namespace QuantConnect.Brokerages.Alpaca
                     {
                         Status = status,
                         FillPrice = trade.Price.Value,
-                        FillQuantity = Convert.ToInt32(trade.Order.FilledQuantity) * (order.Direction == OrderDirection.Buy ? +1 : -1)
+                        FillQuantity = fillQuantity * (order.Direction == OrderDirection.Buy ? 1 : -1)
                     });
                 }
-                else if (trade.Event == TradeUpdateEvent.OrderCanceled)
+                else if (trade.Event == TradeEvent.Canceled)
                 {
                     OnOrderEvent(new OrderEvent(order,
                         DateTime.UtcNow,
                         OrderFee.Zero,
                         "Alpaca Cancel Order Event") { Status = OrderStatus.Canceled });
                 }
-                else if (trade.Event == TradeUpdateEvent.OrderCancelRejected)
+                else if (trade.Event == TradeEvent.OrderCancelRejected)
                 {
                     var message = $"Order cancellation rejected: OrderId: {order.Id}";
                     OnMessage(new BrokerageMessageEvent(BrokerageMessageType.Warning, -1, message));
@@ -417,8 +421,10 @@ namespace QuantConnect.Brokerages.Alpaca
                 Symbol = symbol,
                 Type = securityType,
                 AveragePrice = position.AverageEntryPrice,
+                MarketPrice = position.AssetCurrentPrice,
+                MarketValue = position.MarketValue,
                 CurrencySymbol = "$",
-                Quantity = position.Side == PositionSide.Long ? position.Quantity : -position.Quantity
+                Quantity = position.Quantity
             };
         }
 

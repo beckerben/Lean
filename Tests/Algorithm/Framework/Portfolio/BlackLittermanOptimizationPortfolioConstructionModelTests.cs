@@ -16,7 +16,6 @@
 using Accord.Math;
 using NUnit.Framework;
 using Python.Runtime;
-using QuantConnect.Algorithm.Framework;
 using QuantConnect.Algorithm.Framework.Alphas;
 using QuantConnect.Algorithm.Framework.Portfolio;
 using QuantConnect.Data;
@@ -25,21 +24,21 @@ using QuantConnect.Data.UniverseSelection;
 using QuantConnect.Securities;
 using System;
 using System.Linq;
-using QuantConnect.Tests.Common.Securities;
+using QuantConnect.Algorithm;
 
 namespace QuantConnect.Tests.Algorithm.Framework.Portfolio
 {
     [TestFixture]
     public class BlackLittermanOptimizationPortfolioConstructionModelTests
     {
-        private QCAlgorithmFramework _algorithm;
+        private QCAlgorithm _algorithm;
         private Insight[] _view1Insights;
         private Insight[] _view2Insights;
 
         [TestFixtureSetUp]
         public void SetUp()
         {
-            _algorithm = new QCAlgorithmFramework();
+            _algorithm = new QCAlgorithm();
             SetUtcTime(new DateTime(2018, 8, 7));
 
             // Germany will outperform the other European markets by 5%
@@ -150,6 +149,54 @@ namespace QuantConnect.Tests.Algorithm.Framework.Portfolio
             }
         }
 
+        [Test]
+        [TestCase(Language.CSharp, 11, true)]
+        [TestCase(Language.CSharp, -11, true)]
+        [TestCase(Language.CSharp, 0.001d, true)]
+        [TestCase(Language.CSharp, -0.001d, true)]
+        [TestCase(Language.CSharp, 0.1, false)]
+        [TestCase(Language.CSharp, -0.1, false)]
+        [TestCase(Language.CSharp, 0.011d, false)]
+        [TestCase(Language.CSharp, -0.011d, false)]
+        [TestCase(Language.CSharp, 0, true)]
+        [TestCase(Language.Python, 0, true)]
+        [TestCase(Language.Python, 11, true)]
+        [TestCase(Language.Python, -11, true)]
+        [TestCase(Language.Python, 0.001d, true)]
+        [TestCase(Language.Python, -0.001d, true)]
+        [TestCase(Language.Python, 0.1, false)]
+        [TestCase(Language.Python, -0.1, false)]
+        [TestCase(Language.Python, 0.011d, false)]
+        [TestCase(Language.Python, -0.011d, false)]
+        public void IgnoresInsightsWithInvalidMagnitudeValue(Language language, double magnitude, bool expectZero)
+        {
+            SetPortfolioConstruction(language);
+            _algorithm.Settings.MaxAbsolutePortfolioTargetPercentage = 10;
+            _algorithm.Settings.MinAbsolutePortfolioTargetPercentage = 0.01m;
+
+            var insights = new[]
+            {
+                GetInsight("View 1", "AUS", magnitude),
+                GetInsight("View 1", "CAN", magnitude),
+                GetInsight("View 1", "FRA", magnitude),
+                GetInsight("View 1", "GER", magnitude),
+                GetInsight("View 1", "JAP", magnitude),
+                GetInsight("View 1", "UK" , magnitude),
+                GetInsight("View 1", "USA", magnitude)
+            };
+
+            var actualTargets = _algorithm.PortfolioConstruction.CreateTargets(_algorithm, insights);
+
+            if (expectZero)
+            {
+                Assert.AreEqual(0, actualTargets.Count());
+            }
+            else
+            {
+                Assert.AreNotEqual(0, actualTargets.Count());
+            }
+        }
+
         private Security GetSecurity(Symbol symbol, Resolution resolution)
         {
             var timezone = _algorithm.TimeZone;
@@ -160,7 +207,9 @@ namespace QuantConnect.Tests.Algorithm.Framework.Portfolio
                 config,
                 new Cash(Currencies.USD, 0, 1),
                 SymbolProperties.GetDefault(Currencies.USD),
-                ErrorCurrencyConverter.Instance
+                ErrorCurrencyConverter.Instance,
+                RegisteredSecurityDataTypesProvider.Null,
+                new SecurityCache()
             );
         }
 
@@ -235,7 +284,7 @@ namespace QuantConnect.Tests.Algorithm.Framework.Portfolio
                 return w.Dot(Σ.Multiply(delta));
             }
 
-            public override void OnSecuritiesChanged(QCAlgorithmFramework algorithm, SecurityChanges changes)
+            public override void OnSecuritiesChanged(QCAlgorithm algorithm, SecurityChanges changes)
             {
 
             }
