@@ -13,7 +13,6 @@
  * limitations under the License.
 */
 
-using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -104,7 +103,7 @@ namespace QuantConnect.Brokerages.Alpaca
             if (symbol.ID.SecurityType != SecurityType.Equity)
                 return false;
 
-            return symbol.Value.ToLower().IndexOf("universe", StringComparison.Ordinal) == -1;
+            return symbol.Value.IndexOfInvariant("universe", true) == -1;
         }
 
         /// <summary>

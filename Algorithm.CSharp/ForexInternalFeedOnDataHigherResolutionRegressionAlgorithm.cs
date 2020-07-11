@@ -29,6 +29,7 @@ namespace QuantConnect.Algorithm.CSharp
     {
         private readonly Dictionary<Symbol, int> _dataPointsPerSymbol = new Dictionary<Symbol, int>();
         private bool _added;
+        private Symbol _eurusd;
 
         /// <summary>
         /// Initialise the data and resolution required, as well as the cash and start-end dates for your algorithm. All algorithms must initialized.
@@ -39,6 +40,7 @@ namespace QuantConnect.Algorithm.CSharp
             SetEndDate(2013, 10, 8);
             SetCash(100000);
 
+            _eurusd = QuantConnect.Symbol.Create("EURUSD", SecurityType.Forex, Market.FXCM);
             var eurgbp = AddForex("EURGBP", Resolution.Daily);
             _dataPointsPerSymbol.Add(eurgbp.Symbol, 0);
         }
@@ -51,7 +53,9 @@ namespace QuantConnect.Algorithm.CSharp
         {
             if (_added)
             {
-                var eurUsdSubscription = SubscriptionManager.Subscriptions.Single(x => x.Symbol.Value == "EURUSD");
+                var eurUsdSubscription = SubscriptionManager.SubscriptionDataConfigService
+                    .GetSubscriptionDataConfigs(_eurusd, includeInternalConfigs:true)
+                    .Single();
                 if (eurUsdSubscription.IsInternalFeed)
                 {
                     throw new Exception("Unexpected internal 'EURUSD' Subscription");
@@ -59,13 +63,15 @@ namespace QuantConnect.Algorithm.CSharp
             }
             if (!_added)
             {
-                var eurUsdSubscription = SubscriptionManager.Subscriptions.Single(x => x.Symbol.Value == "EURUSD");
+                var eurUsdSubscription = SubscriptionManager.SubscriptionDataConfigService
+                    .GetSubscriptionDataConfigs(_eurusd, includeInternalConfigs: true)
+                    .Single();
                 if (!eurUsdSubscription.IsInternalFeed)
                 {
                     throw new Exception("Unexpected not internal 'EURUSD' Subscription");
                 }
-                var eurusd = AddForex("EURUSD", Resolution.Hour);
-                _dataPointsPerSymbol.Add(eurusd.Symbol, 0);
+                AddForex("EURUSD", Resolution.Hour);
+                _dataPointsPerSymbol.Add(_eurusd, 0);
 
                 _added = true;
             }
@@ -75,7 +81,7 @@ namespace QuantConnect.Algorithm.CSharp
                 var symbol = kvp.Key;
                 _dataPointsPerSymbol[symbol]++;
 
-                Log($"{Time} {symbol.Value} {kvp.Value.Price}");
+                Log($"{Time} {symbol.Value} {kvp.Value.Price} EndTime {kvp.Value.EndTime}");
             }
         }
 
@@ -88,7 +94,7 @@ namespace QuantConnect.Algorithm.CSharp
             var expectedDataPointsPerSymbol = new Dictionary<string, int>
             {
                 { "EURGBP", 3 },
-                { "EURUSD", 24 }
+                { "EURUSD", 48 }
             };
 
             foreach (var kvp in _dataPointsPerSymbol)
@@ -99,7 +105,7 @@ namespace QuantConnect.Algorithm.CSharp
 
                 if (actualDataPoints != expectedDataPointsPerSymbol[symbol.Value])
                 {
-                    throw new Exception($"Data point count mismatch for symbol {symbol.Value}: expected: {expectedDataPointsPerSymbol}, actual: {actualDataPoints}");
+                    throw new Exception($"Data point count mismatch for symbol {symbol.Value}: expected: {expectedDataPointsPerSymbol[symbol.Value]}, actual: {actualDataPoints}");
                 }
             }
         }
@@ -127,6 +133,7 @@ namespace QuantConnect.Algorithm.CSharp
             {"Expectancy", "0"},
             {"Net Profit", "0%"},
             {"Sharpe Ratio", "0"},
+            {"Probabilistic Sharpe Ratio", "0%"},
             {"Loss Rate", "0%"},
             {"Win Rate", "0%"},
             {"Profit-Loss Ratio", "0"},
@@ -137,7 +144,26 @@ namespace QuantConnect.Algorithm.CSharp
             {"Information Ratio", "0"},
             {"Tracking Error", "0"},
             {"Treynor Ratio", "0"},
-            {"Total Fees", "$0.00"}
+            {"Total Fees", "$0.00"},
+            {"Fitness Score", "0"},
+            {"Kelly Criterion Estimate", "0"},
+            {"Kelly Criterion Probability Value", "0"},
+            {"Sortino Ratio", "79228162514264337593543950335"},
+            {"Return Over Maximum Drawdown", "79228162514264337593543950335"},
+            {"Portfolio Turnover", "0"},
+            {"Total Insights Generated", "0"},
+            {"Total Insights Closed", "0"},
+            {"Total Insights Analysis Completed", "0"},
+            {"Long Insight Count", "0"},
+            {"Short Insight Count", "0"},
+            {"Long/Short Ratio", "100%"},
+            {"Estimated Monthly Alpha Value", "$0"},
+            {"Total Accumulated Estimated Alpha Value", "$0"},
+            {"Mean Population Estimated Insight Value", "$0"},
+            {"Mean Population Direction", "0%"},
+            {"Mean Population Magnitude", "0%"},
+            {"Rolling Averaged Population Direction", "0%"},
+            {"Rolling Averaged Population Magnitude", "0%"}
         };
     }
 }

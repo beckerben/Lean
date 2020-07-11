@@ -31,6 +31,7 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Enumerators
     public class AuxiliaryDataEnumerator : IEnumerator<BaseData>
     {
         private readonly Queue<BaseData> _auxiliaryData;
+        private bool _initialized;
 
         /// <summary>
         /// Creates a new instance
@@ -41,26 +42,25 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Enumerators
         /// <param name="tradableDateEventProviders">The tradable dates event providers</param>
         /// <param name="tradableDayNotifier">Tradable dates provider</param>
         /// <param name="includeAuxiliaryData">True to emit auxiliary data</param>
+        /// <param name="startTime">Start date for the data request</param>
         public AuxiliaryDataEnumerator(
             SubscriptionDataConfig config,
-            FactorFile factorFile,
-            MapFile mapFile,
+            Lazy<FactorFile> factorFile,
+            Lazy<MapFile> mapFile,
             ITradableDateEventProvider []tradableDateEventProviders,
             ITradableDatesNotifier tradableDayNotifier,
-            bool includeAuxiliaryData)
+            bool includeAuxiliaryData,
+            DateTime startTime)
         {
             _auxiliaryData = new Queue<BaseData>();
 
-            foreach (var tradableDateEventProvider in tradableDateEventProviders)
-            {
-                tradableDateEventProvider.Initialize(
-                    config,
-                    factorFile,
-                    mapFile);
-            }
-
             tradableDayNotifier.NewTradableDate += (sender, eventArgs) =>
             {
+                if (!_initialized)
+                {
+                    Initialize(config, factorFile, mapFile, tradableDateEventProviders, startTime);
+                }
+
                 foreach (var tradableDateEventProvider in tradableDateEventProviders)
                 {
                     // Call implementation
@@ -78,6 +78,27 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Enumerators
             };
         }
 
+        /// <summary>
+        /// Late initialization so it is performed in the data feed stack
+        /// and not in the algorithm thread
+        /// </summary>
+        private void Initialize(SubscriptionDataConfig config,
+            Lazy<FactorFile> factorFile,
+            Lazy<MapFile> mapFile,
+            ITradableDateEventProvider[] tradableDateEventProviders,
+            DateTime startTime)
+        {
+            foreach (var tradableDateEventProvider in tradableDateEventProviders)
+            {
+                tradableDateEventProvider.Initialize(
+                    config,
+                    factorFile?.Value,
+                    mapFile?.Value,
+                    startTime);
+            }
+            _initialized = true;
+        }
+
 
         /// <summary>
         /// Advances the enumerator to the next element.
@@ -85,7 +106,7 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Enumerators
         /// <returns>Always true</returns>
         public virtual bool MoveNext()
         {
-            Current = _auxiliaryData.Any() ? _auxiliaryData.Dequeue() : null;
+            Current = _auxiliaryData.Count != 0 ? _auxiliaryData.Dequeue() : null;
             return true;
         }
 

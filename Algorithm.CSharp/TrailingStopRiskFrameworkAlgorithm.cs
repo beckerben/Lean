@@ -15,7 +15,6 @@
 
 using System;
 using System.Collections.Generic;
-using QuantConnect.Algorithm.Framework;
 using QuantConnect.Algorithm.Framework.Alphas;
 using QuantConnect.Algorithm.Framework.Execution;
 using QuantConnect.Algorithm.Framework.Portfolio;
@@ -29,7 +28,7 @@ namespace QuantConnect.Algorithm.CSharp
     /// <summary>
     /// Show cases how to use the <see cref="TrailingStopRiskManagementModel"/>
     /// </summary>
-    public class TrailingStopRiskFrameworkAlgorithm : QCAlgorithmFramework, IRegressionAlgorithmDefinition
+    public class TrailingStopRiskFrameworkAlgorithm : QCAlgorithm, IRegressionAlgorithmDefinition
     {
         /// <summary>
         /// Initialise the data and resolution required, as well as the cash and start-end dates for your algorithm. All algorithms must initialized.
@@ -81,19 +80,38 @@ namespace QuantConnect.Algorithm.CSharp
             {"Drawdown", "2.300%"},
             {"Expectancy", "-1"},
             {"Net Profit", "1.548%"},
-            {"Sharpe Ratio", "4.05"},
+            {"Sharpe Ratio", "4.421"},
+            {"Probabilistic Sharpe Ratio", "65.244%"},
             {"Loss Rate", "100%"},
             {"Win Rate", "0%"},
             {"Profit-Loss Ratio", "0"},
-            {"Alpha", "0.007"},
-            {"Beta", "71.017"},
-            {"Annual Standard Deviation", "0.195"},
-            {"Annual Variance", "0.038"},
-            {"Information Ratio", "3.995"},
-            {"Tracking Error", "0.195"},
-            {"Treynor Ratio", "0.011"},
+            {"Alpha", "-0.09"},
+            {"Beta", "1.014"},
+            {"Annual Standard Deviation", "0.223"},
+            {"Annual Variance", "0.05"},
+            {"Information Ratio", "-14.987"},
+            {"Tracking Error", "0.005"},
+            {"Treynor Ratio", "0.973"},
             {"Total Fees", "$16.28"},
-            {"Long/Short Ratio", "100%"}
+            {"Fitness Score", "0.999"},
+            {"Kelly Criterion Estimate", "39.573"},
+            {"Kelly Criterion Probability Value", "0.226"},
+            {"Sortino Ratio", "79228162514264337593543950335"},
+            {"Return Over Maximum Drawdown", "73.731"},
+            {"Portfolio Turnover", "1.243"},
+            {"Total Insights Generated", "100"},
+            {"Total Insights Closed", "99"},
+            {"Total Insights Analysis Completed", "99"},
+            {"Long Insight Count", "100"},
+            {"Short Insight Count", "0"},
+            {"Long/Short Ratio", "100%"},
+            {"Estimated Monthly Alpha Value", "$158418.3850"},
+            {"Total Accumulated Estimated Alpha Value", "$25522.9620"},
+            {"Mean Population Estimated Insight Value", "$257.8077"},
+            {"Mean Population Direction", "54.5455%"},
+            {"Mean Population Magnitude", "54.5455%"},
+            {"Rolling Averaged Population Direction", "59.8056%"},
+            {"Rolling Averaged Population Magnitude", "59.8056%"}
         };
     }
 }

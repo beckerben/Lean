@@ -54,7 +54,7 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Enumerators.Factories
             // also provides some immediate fast-forward to handle spooling through remote files quickly
             var frontier = Ref.Create(request.StartTimeLocal);
             var lastSourceRefreshTime = DateTime.MinValue;
-            var sourceFactory = (BaseData) ObjectActivator.GetActivator(config.Type).Invoke(new object[] {config.Type});
+            var sourceFactory = config.GetBaseDataInstance();
 
             // this is refreshing the enumerator stack for each new source
             var refresher = new RefreshEnumerator<BaseData>(() =>
@@ -72,7 +72,7 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Enumerators.Factories
                 var source = sourceFactory.GetSource(config, localDate, true);
 
                 // fetch the new source and enumerate the data source reader
-                var enumerator = EnumerateDataSourceReader(config, dataProvider, frontier, source, localDate);
+                var enumerator = EnumerateDataSourceReader(config, dataProvider, frontier, source, localDate, sourceFactory);
 
                 if (SourceRequiresFastForward(source))
                 {
@@ -98,7 +98,26 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Enumerators.Factories
                     enumerator = enumerator.SelectMany(data =>
                     {
                         var collection = data as BaseDataCollection;
-                        return collection?.Data.GetEnumerator() ?? new List<BaseData> {data}.GetEnumerator();
+                        IEnumerator<BaseData> collectionEnumerator;
+                        if (collection != null)
+                        {
+                            if (source.TransportMedium == SubscriptionTransportMedium.Rest)
+                            {
+                                // we want to make sure the data points we *unroll* are not past
+                                collectionEnumerator = collection.Data
+                                    .Where(baseData => baseData.EndTime > frontier.Value)
+                                    .GetEnumerator();
+                            }
+                            else
+                            {
+                                collectionEnumerator = collection.Data.GetEnumerator();
+                            }
+                        }
+                        else
+                        {
+                            collectionEnumerator = new List<BaseData> { data }.GetEnumerator();
+                        }
+                        return collectionEnumerator;
                     });
                 }
 
@@ -108,23 +127,44 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Enumerators.Factories
             return refresher;
         }
 
-        private IEnumerator<BaseData> EnumerateDataSourceReader(SubscriptionDataConfig config, IDataProvider dataProvider, Ref<DateTime> localFrontier, SubscriptionDataSource source, DateTime localDate)
+        private IEnumerator<BaseData> EnumerateDataSourceReader(SubscriptionDataConfig config, IDataProvider dataProvider, Ref<DateTime> localFrontier, SubscriptionDataSource source, DateTime localDate, BaseData baseDataInstance)
         {
             using (var dataCacheProvider = new SingleEntryDataCacheProvider(dataProvider))
             {
                 var newLocalFrontier = localFrontier.Value;
-                var dataSourceReader = GetSubscriptionDataSourceReader(source, dataCacheProvider, config, localDate);
+                var dataSourceReader = GetSubscriptionDataSourceReader(source, dataCacheProvider, config, localDate, baseDataInstance);
                 foreach (var datum in dataSourceReader.Read(source))
                 {
                     // always skip past all times emitted on the previous invocation of this enumerator
                     // this allows data at the same time from the same refresh of the source while excluding
                     // data from different refreshes of the source
-                    if (datum.EndTime > localFrontier.Value)
+                    if (datum != null && datum.EndTime > localFrontier.Value)
                     {
                         yield return datum;
                     }
+                    else if (!SourceRequiresFastForward(source))
+                    {
+                        // if the 'source' is Rest and there is no new value,
+                        // we *break*, else we will be caught in a tight loop
+                        // because Rest source never ends!
+                        // edit: we 'break' vs 'return null' so that the source is refreshed
+                        // allowing date changes to impact the source value
+                        // note it will respect 'minimumTimeBetweenCalls'
+                        break;
+                    }
 
-                    newLocalFrontier = Time.Max(datum.EndTime, newLocalFrontier);
+                    if (datum != null)
+                    {
+                        newLocalFrontier = Time.Max(datum.EndTime, newLocalFrontier);
+
+                        if (!SourceRequiresFastForward(source))
+                        {
+                            // if the 'source' is Rest we need to update the localFrontier here
+                            // because Rest source never ends!
+                            // Should be advance frontier for all source types here?
+                            localFrontier.Value = newLocalFrontier;
+                        }
+                    }
                 }
 
                 localFrontier.Value = newLocalFrontier;
@@ -137,10 +177,11 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Enumerators.Factories
         protected virtual ISubscriptionDataSourceReader GetSubscriptionDataSourceReader(SubscriptionDataSource source,
             IDataCacheProvider dataCacheProvider,
             SubscriptionDataConfig config,
-            DateTime date
+            DateTime date,
+            BaseData baseDataInstance
             )
         {
-            return SubscriptionDataSourceReader.ForSource(source, dataCacheProvider, config, date, true);
+            return SubscriptionDataSourceReader.ForSource(source, dataCacheProvider, config, date, true, baseDataInstance);
         }
 
         private bool SourceRequiresFastForward(SubscriptionDataSource source)

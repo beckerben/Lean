@@ -15,7 +15,6 @@
 */
 
 using System.Collections.Generic;
-using QuantConnect.Algorithm.Framework;
 using QuantConnect.Algorithm.Framework.Alphas;
 using QuantConnect.Algorithm.Framework.Execution;
 using QuantConnect.Algorithm.Framework.Portfolio;
@@ -30,7 +29,7 @@ namespace QuantConnect.Algorithm.CSharp
     /// This algorithm shows how the execution model works to split up orders and submit them only when
     /// the price is 2 standard deviations from the 60min mean (default model settings).
     /// </summary>
-    public class StandardDeviationExecutionModelRegressionAlgorithm : QCAlgorithmFramework, IRegressionAlgorithmDefinition
+    public class StandardDeviationExecutionModelRegressionAlgorithm : QCAlgorithm, IRegressionAlgorithmDefinition
     {
         public override void Initialize()
         {
@@ -80,18 +79,25 @@ namespace QuantConnect.Algorithm.CSharp
             {"Drawdown", "0.500%"},
             {"Expectancy", "0"},
             {"Net Profit", "3.557%"},
-            {"Sharpe Ratio", "10.031"},
+            {"Sharpe Ratio", "11.607"},
+            {"Probabilistic Sharpe Ratio", "99.976%"},
             {"Loss Rate", "0%"},
             {"Win Rate", "100%"},
             {"Profit-Loss Ratio", "0"},
-            {"Alpha", "0"},
-            {"Beta", "161.24"},
-            {"Annual Standard Deviation", "0.177"},
-            {"Annual Variance", "0.031"},
-            {"Information Ratio", "9.976"},
-            {"Tracking Error", "0.177"},
-            {"Treynor Ratio", "0.011"},
+            {"Alpha", "1.397"},
+            {"Beta", "0.78"},
+            {"Annual Standard Deviation", "0.192"},
+            {"Annual Variance", "0.037"},
+            {"Information Ratio", "11.856"},
+            {"Tracking Error", "0.098"},
+            {"Treynor Ratio", "2.852"},
             {"Total Fees", "$230.20"},
+            {"Fitness Score", "0.581"},
+            {"Kelly Criterion Estimate", "34.534"},
+            {"Kelly Criterion Probability Value", "0.444"},
+            {"Sortino Ratio", "79228162514264337593543950335"},
+            {"Return Over Maximum Drawdown", "39267.171"},
+            {"Portfolio Turnover", "0.581"},
             {"Total Insights Generated", "5"},
             {"Total Insights Closed", "3"},
             {"Total Insights Analysis Completed", "3"},

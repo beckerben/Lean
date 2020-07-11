@@ -15,7 +15,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using Newtonsoft.Json;
 using NUnit.Framework;
@@ -31,6 +30,44 @@ namespace QuantConnect.Tests.Common.Util
     [TestFixture]
     public class ExtensionsTests
     {
+        [Test]
+        public void SeriesIsNotEmpty()
+        {
+            var series = new Series("SadSeries")
+                { Values = new List<ChartPoint> { new ChartPoint(1, 1) } };
+
+            Assert.IsFalse(series.IsEmpty());
+        }
+
+        [Test]
+        public void SeriesIsEmpty()
+        {
+            Assert.IsTrue((new Series("Cat")).IsEmpty());
+        }
+
+        [Test]
+        public void ChartIsEmpty()
+        {
+            Assert.IsTrue((new Chart("HappyChart")).IsEmpty());
+        }
+
+        [Test]
+        public void ChartIsEmptyWithEmptySeries()
+        {
+            Assert.IsTrue((new Chart("HappyChart")
+                { Series = new Dictionary<string, Series> { { "SadSeries", new Series("SadSeries") } }}).IsEmpty());
+        }
+
+        [Test]
+        public void ChartIsNotEmptyWithNonEmptySeries()
+        {
+            var series = new Series("SadSeries")
+                { Values = new List<ChartPoint> { new ChartPoint(1, 1) } };
+
+            Assert.IsFalse((new Chart("HappyChart")
+                { Series = new Dictionary<string, Series> { { "SadSeries", series } } }).IsEmpty());
+        }
+
         [Test]
         public void IsSubclassOfGenericWorksWorksForNonGenericType()
         {
@@ -164,6 +201,27 @@ namespace QuantConnect.Tests.Common.Util
             var hours = MarketHoursDatabase.FromDataFolder().GetExchangeHours(Market.GDAX, null, SecurityType.Crypto);
             var exchangeRounded = time.ExchangeRoundDownInTimeZone(Time.OneHour, hours, TimeZones.Utc, true);
             Assert.AreEqual(expected, exchangeRounded);
+        }
+
+        [Test]
+        // this unit test reproduces a fixed infinite loop situation, due to a daylight saving time change, GH issue 3707.
+        public void RoundDownInTimeZoneAroundDaylightTimeChanges()
+        {
+            // sydney time advanced Sunday, 6 October 2019, 02:00:00 clocks were turned forward 1 hour to
+            // Sunday, 6 October 2019, 03:00:00 local daylight time instead.
+            var timeAt = new DateTime(2019, 10, 6, 10, 0, 0);
+            var expected = new DateTime(2019, 10, 5, 10, 0, 0);
+
+            var exchangeRoundedAt = timeAt.RoundDownInTimeZone(Time.OneDay, TimeZones.Sydney, TimeZones.Utc);
+            // even though there is an entire 'roundingInterval' unit (1 day) between 'timeAt' and 'expected' round down
+            // is affected by daylight savings and rounds down the timeAt
+            Assert.AreEqual(expected, exchangeRoundedAt);
+
+            timeAt = new DateTime(2019, 10, 7, 10, 0, 0);
+            expected = new DateTime(2019, 10, 6, 11, 0, 0);
+
+            exchangeRoundedAt = timeAt.RoundDownInTimeZone(Time.OneDay, TimeZones.Sydney, TimeZones.Utc);
+            Assert.AreEqual(expected, exchangeRoundedAt);
         }
 
         [Test]
@@ -499,7 +557,17 @@ namespace QuantConnect.Tests.Common.Util
         public void NormalizeDecimalReturnsNoTrailingZeros(decimal input, string expectedOutput)
         {
             var output = input.Normalize();
-            Assert.AreEqual(expectedOutput, output.ToString(CultureInfo.InvariantCulture));
+            Assert.AreEqual(expectedOutput, output.ToStringInvariant());
+        }
+
+        [Test]
+        [TestCase(0.072842, 3, "0.0728")]
+        [TestCase(0.0019999, 2, "0.002")]
+        [TestCase(0.01234568423, 6, "0.0123457")]
+        public void RoundToSignificantDigits(double input, int digits, string expectedOutput)
+        {
+            var output = input.RoundToSignificantDigits(digits).ToStringInvariant();
+            Assert.AreEqual(expectedOutput, output);
         }
 
         [Test]
@@ -660,14 +728,14 @@ namespace QuantConnect.Tests.Common.Util
 
             var coarse = Enumerable
                 .Range(0, 9)
-                .Select(x => new CoarseFundamental { Symbol = Symbol.Create(x.ToString(), SecurityType.Equity, Market.USA), Value = x });
+                .Select(x => new CoarseFundamental { Symbol = Symbol.Create(x.ToStringInvariant(), SecurityType.Equity, Market.USA), Value = x });
 
             var symbols = coarseSelector(coarse);
 
             Assert.AreEqual(5, symbols.Length);
             foreach (var symbol in symbols)
             {
-                var price = Convert.ToInt32(symbol.Value);
+                var price = symbol.Value.ConvertInvariant<int>();
                 Assert.AreEqual(0, price % 2);
             }
         }
@@ -735,6 +803,136 @@ namespace QuantConnect.Tests.Common.Util
         }
 
         [Test]
+        public void PyObjectStringConvertToSymbolEnumerable()
+        {
+            SymbolCache.Clear();
+            SymbolCache.Set("SPY", Symbols.SPY);
+
+            IEnumerable<Symbol> symbols;
+            using (Py.GIL())
+            {
+                symbols = new PyString("SPY").ConvertToSymbolEnumerable();
+            }
+
+            Assert.AreEqual(Symbols.SPY, symbols.Single());
+        }
+
+        [Test]
+        public void PyObjectStringListConvertToSymbolEnumerable()
+        {
+            SymbolCache.Clear();
+            SymbolCache.Set("SPY", Symbols.SPY);
+
+            IEnumerable<Symbol> symbols;
+            using (Py.GIL())
+            {
+                symbols = new PyList(new[] { "SPY".ToPython() }).ConvertToSymbolEnumerable();
+            }
+
+            Assert.AreEqual(Symbols.SPY, symbols.Single());
+        }
+
+        [Test]
+        public void PyObjectSymbolConvertToSymbolEnumerable()
+        {
+            IEnumerable<Symbol> symbols;
+            using (Py.GIL())
+            {
+                symbols = Symbols.SPY.ToPython().ConvertToSymbolEnumerable();
+            }
+
+            Assert.AreEqual(Symbols.SPY, symbols.Single());
+        }
+
+        [Test]
+        public void PyObjectSymbolListConvertToSymbolEnumerable()
+        {
+            IEnumerable<Symbol> symbols;
+            using (Py.GIL())
+            {
+                symbols = new PyList(new[] {Symbols.SPY.ToPython()}).ConvertToSymbolEnumerable();
+            }
+
+            Assert.AreEqual(Symbols.SPY, symbols.Single());
+        }
+
+        [Test]
+        public void PyObjectNonSymbolObjectConvertToSymbolEnumerable()
+        {
+            using (Py.GIL())
+            {
+                Assert.Throws<ArgumentException>(() => new PyInt(1).ConvertToSymbolEnumerable().ToList());
+            }
+        }
+
+        [Test]
+        public void PyObjectDictionaryConvertToDictionary_Success()
+        {
+            using (Py.GIL())
+            {
+                var actualDictionary = PythonEngine.ModuleFromString(
+                    "PyObjectDictionaryConvertToDictionary_Success",
+                    @"
+from datetime import datetime as dt
+actualDictionary = dict()
+actualDictionary.update({'SPY': dt(2019,10,3)})
+actualDictionary.update({'QQQ': dt(2019,10,4)})
+actualDictionary.update({'IBM': dt(2019,10,5)})
+"
+                ).GetAttr("actualDictionary").ConvertToDictionary<string, DateTime>();
+
+                Assert.AreEqual(3, actualDictionary.Count);
+                var expectedDictionary = new Dictionary<string, DateTime>
+                {
+                    {"SPY", new DateTime(2019,10,3) },
+                    {"QQQ", new DateTime(2019,10,4) },
+                    {"IBM", new DateTime(2019,10,5) },
+                };
+
+                foreach (var kvp in expectedDictionary)
+                {
+                    Assert.IsTrue(actualDictionary.ContainsKey(kvp.Key));
+                    var actual = actualDictionary[kvp.Key];
+                    Assert.AreEqual(kvp.Value, actual);
+                }
+            }
+        }
+
+        [Test]
+        public void PyObjectDictionaryConvertToDictionary_FailNotDictionary()
+        {
+            using (Py.GIL())
+            {
+                var pyObject = PythonEngine.ModuleFromString(
+                    "PyObjectDictionaryConvertToDictionary_FailNotDictionary",
+                    "actualDictionary = list()"
+                ).GetAttr("actualDictionary");
+
+                Assert.Throws<ArgumentException>(() => pyObject.ConvertToDictionary<string, DateTime>());
+            }
+        }
+
+        [Test]
+        public void PyObjectDictionaryConvertToDictionary_FailWrongItemType()
+        {
+            using (Py.GIL())
+            {
+                var pyObject = PythonEngine.ModuleFromString(
+                    "PyObjectDictionaryConvertToDictionary_FailWrongItemType",
+                    @"
+actualDictionary = dict()
+actualDictionary.update({'SPY': 3})
+actualDictionary.update({'QQQ': 4})
+actualDictionary.update({'IBM': 5})
+"
+                ).GetAttr("actualDictionary");
+
+                Assert.Throws<ArgumentException>(() => pyObject.ConvertToDictionary<string, DateTime>());
+            }
+        }
+
+
+        [Test]
         public void BatchByDoesNotDropItems()
         {
             var list = new List<int> {1, 2, 3, 4, 5};
@@ -764,6 +962,29 @@ namespace QuantConnect.Tests.Common.Util
             Assert.AreEqual(order.SecurityType, orderTicket.SecurityType);
         }
 
+        [Test]
+        public void DecimalTruncateTo3DecimalPlaces()
+        {
+            var value = 10.999999m;
+            Assert.AreEqual(10.999m, value.TruncateTo3DecimalPlaces());
+        }
+
+        [Test]
+        public void DecimalTruncateTo3DecimalPlacesDoesNotThrowException()
+        {
+            var value = decimal.MaxValue;
+            Assert.DoesNotThrow(() => value.TruncateTo3DecimalPlaces());
+
+            value = decimal.MinValue;
+            Assert.DoesNotThrow(() => value.TruncateTo3DecimalPlaces());
+
+            value = decimal.MaxValue - 1;
+            Assert.DoesNotThrow(() => value.TruncateTo3DecimalPlaces());
+
+            value = decimal.MinValue + 1;
+            Assert.DoesNotThrow(() => value.TruncateTo3DecimalPlaces());
+        }
+
         private PyObject ConvertToPyObject(object value)
         {
             using (Py.GIL())
@@ -771,7 +992,6 @@ namespace QuantConnect.Tests.Common.Util
                 return value.ToPython();
             }
         }
-
 
         private class Super<T>
         {

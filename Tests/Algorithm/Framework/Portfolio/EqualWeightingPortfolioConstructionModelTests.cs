@@ -16,7 +16,6 @@
 using NodaTime;
 using NUnit.Framework;
 using Python.Runtime;
-using QuantConnect.Algorithm.Framework;
 using QuantConnect.Algorithm.Framework.Alphas;
 using QuantConnect.Algorithm.Framework.Portfolio;
 using QuantConnect.Data.Market;
@@ -26,8 +25,8 @@ using QuantConnect.Securities.Equity;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using QuantConnect.Algorithm;
 using QuantConnect.Orders.Fees;
-using QuantConnect.Tests.Common.Securities;
 using QuantConnect.Tests.Engine.DataFeeds;
 
 namespace QuantConnect.Tests.Algorithm.Framework.Portfolio
@@ -35,13 +34,13 @@ namespace QuantConnect.Tests.Algorithm.Framework.Portfolio
     [TestFixture]
     public class EqualWeightingPortfolioConstructionModelTests
     {
-        private QCAlgorithmFramework _algorithm;
+        private QCAlgorithm _algorithm;
         private const decimal _startingCash = 100000;
 
         [TestFixtureSetUp]
         public void SetUp()
         {
-            _algorithm = new QCAlgorithmFramework();
+            _algorithm = new QCAlgorithm();
             _algorithm.SubscriptionManager.SetDataManager(new DataManagerStub(_algorithm));
 
             var prices = new Dictionary<Symbol, decimal>
@@ -314,7 +313,7 @@ namespace QuantConnect.Tests.Algorithm.Framework.Portfolio
         [TestCase(Language.Python)]
         public void DoesNotReturnTargetsIfSecurityPriceIsZero(Language language)
         {
-            var algorithm = new QCAlgorithmFramework();
+            var algorithm = new QCAlgorithm();
             algorithm.SubscriptionManager.SetDataManager(new DataManagerStub(algorithm));
             algorithm.AddEquity(Symbols.SPY.Value);
             algorithm.SetDateTime(DateTime.MinValue.ConvertToUtc(_algorithm.TimeZone));
@@ -327,6 +326,15 @@ namespace QuantConnect.Tests.Algorithm.Framework.Portfolio
             Assert.AreEqual(0, actualTargets.Count());
         }
 
+        [Test]
+        [TestCase(Language.CSharp)]
+        [TestCase(Language.Python)]
+        public void DoesNotThrowWithAlternativeOverloads(Language language)
+        {
+            Assert.DoesNotThrow(() => SetPortfolioConstruction(language, _algorithm, Resolution.Minute));
+            Assert.DoesNotThrow(() => SetPortfolioConstruction(language, _algorithm, TimeSpan.FromDays(1)));
+            Assert.DoesNotThrow(() => SetPortfolioConstruction(language, _algorithm, Expiry.EndOfWeek));
+        }
 
         private Security GetSecurity(Symbol symbol)
         {
@@ -336,7 +344,9 @@ namespace QuantConnect.Tests.Algorithm.Framework.Portfolio
                 config,
                 new Cash(Currencies.USD, 0, 1),
                 SymbolProperties.GetDefault(Currencies.USD),
-                ErrorCurrencyConverter.Instance
+                ErrorCurrencyConverter.Instance,
+                RegisteredSecurityDataTypesProvider.Null,
+                new SecurityCache()
             );
         }
 
@@ -349,15 +359,16 @@ namespace QuantConnect.Tests.Algorithm.Framework.Portfolio
             return insight;
         }
 
-        private void SetPortfolioConstruction(Language language, QCAlgorithmFramework algorithm)
+        private void SetPortfolioConstruction(Language language, QCAlgorithm algorithm, dynamic paramenter = null)
         {
-            algorithm.SetPortfolioConstruction(new EqualWeightingPortfolioConstructionModel());
+            paramenter = paramenter ?? Resolution.Daily;
+            algorithm.SetPortfolioConstruction(new EqualWeightingPortfolioConstructionModel(paramenter));
             if (language == Language.Python)
             {
                 using (Py.GIL())
                 {
                     var name = nameof(EqualWeightingPortfolioConstructionModel);
-                    var instance = Py.Import(name).GetAttr(name).Invoke();
+                    var instance = Py.Import(name).GetAttr(name).Invoke(((object) paramenter).ToPython());
                     var model = new PortfolioConstructionModelPythonWrapper(instance);
                     algorithm.SetPortfolioConstruction(model);
                 }

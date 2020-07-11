@@ -21,12 +21,14 @@ using QuantConnect.Interfaces;
 using QuantConnect.Orders;
 using QuantConnect.Securities;
 using QuantConnect.Securities.Option;
+using static QuantConnect.StringExtensions;
 
 namespace QuantConnect.Algorithm
 {
     public partial class QCAlgorithm
     {
         private int _maxOrders = 10000;
+        private bool _isMarketOnOpenOrderWarningSent = false;
 
         /// <summary>
         /// Transaction Manager - Process transaction fills and order management.
@@ -205,10 +207,14 @@ namespace QuantConnect.Algorithm
             if (!security.Exchange.ExchangeOpen)
             {
                 var mooTicket = MarketOnOpenOrder(security.Symbol, quantity, tag);
-                var anyNonDailySubscriptions = security.Subscriptions.Any(x => x.Resolution != Resolution.Daily);
-                if (mooTicket.SubmitRequest.Response.IsSuccess && !anyNonDailySubscriptions)
+                if (!_isMarketOnOpenOrderWarningSent)
                 {
-                    Debug("Converted OrderID: " + mooTicket.OrderId + " into a MarketOnOpen order.");
+                    var anyNonDailySubscriptions = security.Subscriptions.Any(x => x.Resolution != Resolution.Daily);
+                    if (mooTicket.SubmitRequest.Response.IsSuccess && !anyNonDailySubscriptions)
+                    {
+                        Debug("Warning: all market orders sent using daily data, or market orders sent after hours are automatically converted into MarketOnOpen orders.");
+                        _isMarketOnOpenOrderWarningSent = true;
+                    }
                 }
                 return mooTicket;
             }
@@ -551,7 +557,7 @@ namespace QuantConnect.Algorithm
             var orders = new List<OrderTicket>();
 
             // setting up the tag text for all orders of one strategy
-            var strategyTag = strategy.Name + " (" + strategyQuantity.ToString() + ")";
+            var strategyTag = $"{strategy.Name} ({strategyQuantity.ToStringInvariant()})";
 
             // walking through all option legs and issuing orders
             if (strategy.OptionLegs != null)
@@ -565,9 +571,9 @@ namespace QuantConnect.Algorithm
 
                     if (optionSeq.Count() != 1)
                     {
-                        var error = string.Format("Couldn't find the option contract in algorithm securities list. Underlying: {0}, option {1}, strike {2}, expiration: {3}",
-                                strategy.Underlying.ToString(), optionLeg.Right.ToString(), optionLeg.Strike.ToString(), optionLeg.Expiration.ToString());
-                        throw new InvalidOperationException(error);
+                        throw new InvalidOperationException("Couldn't find the option contract in algorithm securities list. " +
+                            Invariant($"Underlying: {strategy.Underlying}, option {optionLeg.Right}, strike {optionLeg.Strike}, ") +
+                            Invariant($"expiration: {optionLeg.Expiration}"));
                     }
 
                     var option = optionSeq.First().Key;
@@ -595,7 +601,7 @@ namespace QuantConnect.Algorithm
                 {
                     if (!Securities.ContainsKey(strategy.Underlying))
                     {
-                        var error = string.Format("Couldn't find the option contract underlying in algorithm securities list. Underlying: {0}", strategy.Underlying.ToString());
+                        var error = $"Couldn't find the option contract underlying in algorithm securities list. Underlying: {strategy.Underlying}";
                         throw new InvalidOperationException(error);
                     }
 
@@ -662,7 +668,11 @@ namespace QuantConnect.Algorithm
 
             if (Math.Abs(request.Quantity) < security.SymbolProperties.LotSize)
             {
-                return OrderResponse.Error(request, OrderResponseErrorCode.OrderQuantityLessThanLoteSize, $"Unable to {request.OrderRequestType.ToString().ToLower()} order with id {request.OrderId} which quantity ({Math.Abs(request.Quantity)}) is less than lot size ({security.SymbolProperties.LotSize}).");
+                return OrderResponse.Error(request, OrderResponseErrorCode.OrderQuantityLessThanLoteSize,
+                    Invariant($"Unable to {request.OrderRequestType.ToLower()} order with id {request.OrderId} which ") +
+                    Invariant($"quantity ({Math.Abs(request.Quantity)}) is less than lot ") +
+                    Invariant($"size ({security.SymbolProperties.LotSize}).")
+                );
             }
 
             if (!security.IsTradable)
@@ -726,7 +736,9 @@ namespace QuantConnect.Algorithm
             if (!LiveMode && Transactions.OrdersCount > _maxOrders)
             {
                 Status = AlgorithmStatus.Stopped;
-                return OrderResponse.Error(request, OrderResponseErrorCode.ExceededMaximumOrders, string.Format("You have exceeded maximum number of orders ({0}), for unlimited orders upgrade your account.", _maxOrders));
+                return OrderResponse.Error(request, OrderResponseErrorCode.ExceededMaximumOrders,
+                    $"You have exceeded maximum number of orders ({_maxOrders.ToStringInvariant()}), for unlimited orders upgrade your account."
+                );
             }
 
             if (request.OrderType == OrderType.OptionExercise)
@@ -778,13 +790,20 @@ namespace QuantConnect.Algorithm
                 return orderIdList;
             }
 
-
-            foreach (var symbol in Securities.Keys.OrderBy(x => x.Value))
+            IEnumerable<Symbol> toLiquidate;
+            if (symbolToLiquidate != null)
             {
-                // symbol not matching, do nothing
-                if (symbol != symbolToLiquidate && symbolToLiquidate != null)
-                    continue;
+                toLiquidate = Securities.ContainsKey(symbolToLiquidate)
+                    ? new[] { symbolToLiquidate } : Enumerable.Empty<Symbol>();
+            }
+            else
+            {
+                toLiquidate = Securities.Keys.OrderBy(x => x.Value);
+            }
 
+
+            foreach (var symbol in toLiquidate)
+            {
                 // get open orders
                 var orders = Transactions.GetOpenOrders(symbol);
 
@@ -843,11 +862,30 @@ namespace QuantConnect.Algorithm
         }
 
         /// <summary>
+        /// Sets holdings for a collection of targets.
+        /// The implementation will order the provided targets executing first those that
+        /// reduce a position, freeing margin.
+        /// </summary>
+        /// <param name="targets">The portfolio desired quantities as percentages</param>
+        /// <param name="liquidateExistingHoldings">True will liquidate existing holdings</param>
+        /// <seealso cref="MarketOrder(QuantConnect.Symbol,decimal,bool,string)"/>
+        public void SetHoldings(List<PortfolioTarget> targets, bool liquidateExistingHoldings = false)
+        {
+            foreach (var portfolioTarget in targets
+                // we need to create targets with quantities for OrderTargetsByMarginImpact
+                .Select(target => new PortfolioTarget(target.Symbol, CalculateOrderQuantity(target.Symbol, target.Quantity)))
+                .OrderTargetsByMarginImpact(this, targetIsDelta:true))
+            {
+                SetHoldingsImpl(portfolioTarget.Symbol, portfolioTarget.Quantity, liquidateExistingHoldings);
+            }
+        }
+
+        /// <summary>
         /// Alias for SetHoldings to avoid the M-decimal errors.
         /// </summary>
         /// <param name="symbol">string symbol we wish to hold</param>
         /// <param name="percentage">double percentage of holdings desired</param>
-        /// <param name="liquidateExistingHoldings">liquidate existing holdings if neccessary to hold this stock</param>
+        /// <param name="liquidateExistingHoldings">liquidate existing holdings if necessary to hold this stock</param>
         /// <seealso cref="MarketOrder(QuantConnect.Symbol,decimal,bool,string)"/>
         public void SetHoldings(Symbol symbol, double percentage, bool liquidateExistingHoldings = false)
         {
@@ -859,7 +897,7 @@ namespace QuantConnect.Algorithm
         /// </summary>
         /// <param name="symbol">string symbol we wish to hold</param>
         /// <param name="percentage">float percentage of holdings desired</param>
-        /// <param name="liquidateExistingHoldings">bool liquidate existing holdings if neccessary to hold this stock</param>
+        /// <param name="liquidateExistingHoldings">bool liquidate existing holdings if necessary to hold this stock</param>
         /// <param name="tag">Tag the order with a short string.</param>
         /// <seealso cref="MarketOrder(QuantConnect.Symbol,decimal,bool,string)"/>
         public void SetHoldings(Symbol symbol, float percentage, bool liquidateExistingHoldings = false, string tag = "")
@@ -872,7 +910,7 @@ namespace QuantConnect.Algorithm
         /// </summary>
         /// <param name="symbol">string symbol we wish to hold</param>
         /// <param name="percentage">float percentage of holdings desired</param>
-        /// <param name="liquidateExistingHoldings">bool liquidate existing holdings if neccessary to hold this stock</param>
+        /// <param name="liquidateExistingHoldings">bool liquidate existing holdings if necessary to hold this stock</param>
         /// <param name="tag">Tag the order with a short string.</param>
         /// <seealso cref="MarketOrder(QuantConnect.Symbol,decimal,bool,string)"/>
         public void SetHoldings(Symbol symbol, int percentage, bool liquidateExistingHoldings = false, string tag = "")
@@ -893,14 +931,14 @@ namespace QuantConnect.Algorithm
         /// <seealso cref="MarketOrder(QuantConnect.Symbol,decimal,bool,string)"/>
         public void SetHoldings(Symbol symbol, decimal percentage, bool liquidateExistingHoldings = false, string tag = "")
         {
-            //Initialize Requirements:
-            Security security;
-            if (!Securities.TryGetValue(symbol, out security))
-            {
-                Error($"{symbol} not found in portfolio. Request this data when initializing the algorithm.");
-                return;
-            }
+            SetHoldingsImpl(symbol, CalculateOrderQuantity(symbol, percentage), liquidateExistingHoldings, tag);
+        }
 
+        /// <summary>
+        /// Set holdings implementation, which uses order quantities (delta) not percentage nor target final quantity
+        /// </summary>
+        private void SetHoldingsImpl(Symbol symbol, decimal orderQuantity, bool liquidateExistingHoldings = false, string tag = "")
+        {
             //If they triggered a liquidate
             if (liquidateExistingHoldings)
             {
@@ -918,18 +956,23 @@ namespace QuantConnect.Algorithm
             }
 
             //Calculate total unfilled quantity for open market orders
-            var marketOrdersQuantity =
-                (from order in Transactions.GetOpenOrders(symbol)
-                 where order.Type == OrderType.Market
-                 select Transactions.GetOrderTicket(order.Id)
-                 into ticket
-                 where ticket != null
-                 select ticket.Quantity - ticket.QuantityFilled).Sum();
+            var marketOrdersQuantity = Transactions.GetOpenOrderTickets(
+                    ticket => ticket.Symbol == symbol
+                              && (ticket.OrderType == OrderType.Market
+                                  || ticket.OrderType == OrderType.MarketOnOpen))
+                .Aggregate(0m, (d, ticket) => d + ticket.Quantity - ticket.QuantityFilled);
 
             //Only place trade if we've got > 1 share to order.
-            var quantity = CalculateOrderQuantity(symbol, percentage) - marketOrdersQuantity;
+            var quantity = orderQuantity - marketOrdersQuantity;
             if (Math.Abs(quantity) > 0)
             {
+                Security security;
+                if (!Securities.TryGetValue(symbol, out security))
+                {
+                    Error($"{symbol} not found in portfolio. Request this data when initializing the algorithm.");
+                    return;
+                }
+
                 //Check whether the exchange is open to send a market order. If not, send a market on open order instead
                 if (security.Exchange.ExchangeOpen)
                 {

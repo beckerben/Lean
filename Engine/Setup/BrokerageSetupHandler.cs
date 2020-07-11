@@ -41,6 +41,11 @@ namespace QuantConnect.Lean.Engine.Setup
     public class BrokerageSetupHandler : ISetupHandler
     {
         /// <summary>
+        /// The worker thread instance the setup handler should use
+        /// </summary>
+        public WorkerThread WorkerThread { get; set; }
+
+        /// <summary>
         /// Any errors from the initialization stored here:
         /// </summary>
         public List<Exception> Errors { get; set; }
@@ -91,7 +96,7 @@ namespace QuantConnect.Lean.Engine.Setup
             IAlgorithm algorithm;
 
             // limit load times to 10 seconds and force the assembly to have exactly one derived type
-            var loader = new Loader(algorithmNodePacket.Language, TimeSpan.FromSeconds(60), names => names.SingleOrAlgorithmTypeName(Config.Get("algorithm-type-name")));
+            var loader = new Loader(false, algorithmNodePacket.Language, TimeSpan.FromSeconds(60), names => names.SingleOrAlgorithmTypeName(Config.Get("algorithm-type-name")), WorkerThread);
             var complete = loader.TryCreateAlgorithmInstanceWithIsolator(assemblyPath, algorithmNodePacket.RamAllocation, out algorithm, out error);
             if (!complete) throw new AlgorithmSetupException($"During the algorithm initialization, the following exception has occurred: {error}");
 
@@ -175,7 +180,7 @@ namespace QuantConnect.Lean.Engine.Setup
                     try
                     {
                         //Set the default brokerage model before initialize
-                        algorithm.SetBrokerageModel(_factory.BrokerageModel);
+                        algorithm.SetBrokerageModel(_factory.GetBrokerageModel(algorithm.Transactions));
 
                         //Margin calls are disabled by default in live mode
                         algorithm.Portfolio.MarginCallModel = MarginCallModel.Null;
@@ -198,6 +203,9 @@ namespace QuantConnect.Lean.Engine.Setup
 
                         // set the future chain provider
                         algorithm.SetFutureChainProvider(new CachingFutureChainProvider(new LiveFutureChainProvider()));
+
+                        // set the object store
+                        algorithm.SetObjectStore(parameters.ObjectStore);
 
                         // If we're going to receive market data from IB,
                         // set the default subscription limit to 100,
@@ -306,6 +314,8 @@ namespace QuantConnect.Lean.Engine.Setup
                 Log.Trace("BrokerageSetupHandler.Setup(): Fetching holdings from brokerage...");
                 try
                 {
+                    var utcNow = DateTime.UtcNow;
+
                     // populate the algorithm with the account's current holdings
                     var holdings = brokerage.GetAccountHoldings();
 
@@ -327,10 +337,13 @@ namespace QuantConnect.Lean.Engine.Setup
 
                         AddUnrequestedSecurity(algorithm, holding.Symbol, minResolution.Value);
 
-                        algorithm.Portfolio[holding.Symbol].SetHoldings(holding.AveragePrice, holding.Quantity);
-                        algorithm.Securities[holding.Symbol].SetMarketPrice(new TradeBar
+                        var security = algorithm.Securities[holding.Symbol];
+                        var exchangeTime = utcNow.ConvertFromUtc(security.Exchange.TimeZone);
+
+                        security.Holdings.SetHoldings(holding.AveragePrice, holding.Quantity);
+                        security.SetMarketPrice(new TradeBar
                         {
-                            Time = DateTime.Now,
+                            Time = exchangeTime,
                             Open = holding.MarketPrice,
                             High = holding.MarketPrice,
                             Low = holding.MarketPrice,
@@ -355,6 +368,10 @@ namespace QuantConnect.Lean.Engine.Setup
                 //Set the starting portfolio value for the strategy to calculate performance:
                 StartingPortfolioValue = algorithm.Portfolio.TotalPortfolioValue;
                 StartingDate = DateTime.Now;
+
+                // we set the free portfolio value based on the initial total value and the free percentage value
+                algorithm.Settings.FreePortfolioValue =
+                    algorithm.Portfolio.TotalPortfolioValue * algorithm.Settings.FreePortfolioValuePercentage;
             }
             catch (Exception err)
             {
@@ -414,9 +431,11 @@ namespace QuantConnect.Lean.Engine.Setup
             foreach (var order in openOrders.OrderByDescending(x => x.SecurityType))
             {
                 // be sure to assign order IDs such that we increment from the SecurityTransactionManager to avoid ID collisions
-                Log.Trace("BrokerageSetupHandler.Setup(): Has open order: " + order.Symbol.Value + " - " + order.Quantity);
-                resultHandler.DebugMessage($"BrokerageSetupHandler.Setup(): Open order detected.  Creating order tickets for open order {order.Symbol.Value} with quantity {order.Quantity}. Beware that this order ticket may not accurately reflect the quantity of the order if the open order is partially filled.");
                 order.Id = algorithm.Transactions.GetIncrementOrderId();
+
+                Log.Trace($"BrokerageSetupHandler.Setup(): Has open order: {order}");
+                resultHandler.DebugMessage($"BrokerageSetupHandler.Setup(): Open order detected.  Creating order tickets for open order {order.Symbol.Value} with quantity {order.Quantity}. Beware that this order ticket may not accurately reflect the quantity of the order if the open order is partially filled.");
+
                 transactionHandler.AddOpenOrder(order, order.ToOrderTicket(algorithm.Transactions));
 
                 // verify existing holding security type
@@ -451,9 +470,8 @@ namespace QuantConnect.Lean.Engine.Setup
             return dataFeeds;
         }
 
-
         /// <summary>
-        /// Adds initializaion error to the Errors list
+        /// Adds initialization error to the Errors list
         /// </summary>
         /// <param name="message">The error message to be added</param>
         /// <param name="inner">The inner exception being wrapped</param>

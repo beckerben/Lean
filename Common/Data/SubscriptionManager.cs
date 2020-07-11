@@ -39,7 +39,8 @@ namespace QuantConnect.Data
         /// <summary>
         ///     Returns an IEnumerable of Subscriptions
         /// </summary>
-        public IEnumerable<SubscriptionDataConfig> Subscriptions => _subscriptionManager.SubscriptionManagerSubscriptions;
+        /// <remarks>Will not return internal subscriptions</remarks>
+        public IEnumerable<SubscriptionDataConfig> Subscriptions => _subscriptionManager.SubscriptionManagerSubscriptions.Where(config => !config.IsInternalFeed);
 
         /// <summary>
         ///     Flags the existence of custom data in the subscriptions
@@ -121,6 +122,7 @@ namespace QuantConnect.Data
         ///     True if this subscription should have filters applied to it (market hours/user
         ///     filters from security), false otherwise
         /// </param>
+        /// <param name="dataNormalizationMode">Define how data is normalized</param>
         /// <returns>
         ///     The newly created <see cref="SubscriptionDataConfig" /> or existing instance if it already existed
         /// </returns>
@@ -135,12 +137,14 @@ namespace QuantConnect.Data
             bool fillDataForward = true,
             bool extendedMarketHours = false,
             bool isInternalFeed = false,
-            bool isFilteredSubscription = true
+            bool isFilteredSubscription = true,
+            DataNormalizationMode dataNormalizationMode = DataNormalizationMode.Adjusted
             )
         {
             return SubscriptionDataConfigService.Add(symbol, resolution, fillDataForward,
                 extendedMarketHours, isFilteredSubscription, isInternalFeed, isCustomData,
-                new List<Tuple<Type, TickType>> {new Tuple<Type, TickType>(dataType, tickType)}).First();
+                new List<Tuple<Type, TickType>> {new Tuple<Type, TickType>(dataType, tickType)},
+                dataNormalizationMode).First();
         }
 
 
@@ -164,7 +168,7 @@ namespace QuantConnect.Data
             foreach (var subscription in subscriptions)
             {
                 // we need to be able to pipe data directly from the data feed into the consolidator
-                if (consolidator.InputType.IsAssignableFrom(subscription.Type))
+                if (IsSubscriptionValidForConsolidator(subscription, consolidator))
                 {
                     subscription.Consolidators.Add(consolidator);
                     return;
@@ -241,6 +245,27 @@ namespace QuantConnect.Data
         public void SetDataManager(IAlgorithmSubscriptionManager subscriptionManager)
         {
             _subscriptionManager = subscriptionManager;
+        }
+
+        /// <summary>
+        /// Checks if the subscription is valid for the consolidator
+        /// </summary>
+        /// <param name="subscription">The subscription configuration</param>
+        /// <param name="consolidator">The consolidator</param>
+        /// <returns>true if the subscription is valid for the consolidator</returns>
+        public static bool IsSubscriptionValidForConsolidator(SubscriptionDataConfig subscription, IDataConsolidator consolidator)
+        {
+            if (subscription.Type == typeof(Tick) &&
+                LeanData.IsCommonLeanDataType(consolidator.OutputType))
+            {
+                var tickType = LeanData.GetCommonTickTypeForCommonDataTypes(
+                    consolidator.OutputType,
+                    subscription.Symbol.SecurityType);
+
+                return subscription.TickType == tickType;
+            }
+
+            return consolidator.InputType.IsAssignableFrom(subscription.Type);
         }
     }
 }

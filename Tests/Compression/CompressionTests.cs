@@ -19,6 +19,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using Ionic.Zip;
+using Newtonsoft.Json;
 using NUnit.Framework;
 
 namespace QuantConnect.Tests.Compression
@@ -50,6 +51,16 @@ namespace QuantConnect.Tests.Compression
                 var contents = streamReader.ReadToEnd();
                 Assert.AreEqual(fileContents, contents);
             }
+        }
+
+        [Test]
+        public void ZipBytesReturnsByteArrayWithCorrectLength()
+        {
+            const string file = "../../../Data/equity/usa/tick/spy/20131007_trade.zip";
+            var fileBytes = File.ReadAllBytes(file);
+            var zippedBytes = QuantConnect.Compression.ZipBytes(fileBytes, "entry");
+
+            Assert.AreEqual(612631, zippedBytes.Length);
         }
 
         [Test]
@@ -113,6 +124,58 @@ namespace QuantConnect.Tests.Compression
                 File.Delete(zipFile);
                 files.ForEach(File.Delete);
             }
+        }
+
+        [Test]
+        public void UnzipToFolderUsesCorrectOutputFolder()
+        {
+            var name = nameof(UnzipToFolderUsesCorrectOutputFolder);
+            var root = new DirectoryInfo(name);
+            var testPath = Path.Combine(root.FullName, "test.txt");
+            var test2Path = Path.Combine(Path.Combine(root.FullName, "sub"), "test2.txt");
+            var zipFile = $"./jo\\se/{name}.zip";
+            var files = new List<string>();
+            try
+            {
+                Directory.CreateDirectory("./jo\\se");
+                root.Create();
+                File.WriteAllText(testPath, "string contents");
+                var sub = root.CreateSubdirectory("sub");
+                File.WriteAllText(test2Path, "string contents 2");
+                QuantConnect.Compression.ZipDirectory(root.FullName, zipFile);
+                Directory.Delete(root.FullName, true);
+                files = QuantConnect.Compression.UnzipToFolder(zipFile);
+
+                Assert.IsTrue(File.Exists(Path.Combine(root.Parent.FullName, "jo\\se", name, "test.txt")));
+                Assert.IsTrue(File.Exists(Path.Combine(root.Parent.FullName, "jo\\se", name, "sub", "test2.txt")));
+            }
+            finally
+            {
+                File.Delete(zipFile);
+                files.ForEach(File.Delete);
+            }
+        }
+
+        [Test]
+        public void UnzipDataSupportsEncoding()
+        {
+            var data = new Dictionary<string, string>
+            {
+                {"Ł", "The key is unicode"}
+            };
+
+            var encoding = Encoding.UTF8;
+            var bytes = encoding.GetBytes(JsonConvert.SerializeObject(data));
+            var compressed = QuantConnect.Compression.ZipBytes(bytes, "entry.json");
+            var decompressed = QuantConnect.Compression.UnzipData(compressed, encoding);
+            var redata = JsonConvert.DeserializeObject<Dictionary<string, string>>(
+                decompressed.Single().Value
+            );
+
+            var expected = data.Single();
+            var actual = redata.Single();
+            Assert.AreEqual(expected.Key, actual.Key);
+            Assert.AreEqual(expected.Value, actual.Value);
         }
     }
 }

@@ -42,12 +42,12 @@ namespace QuantConnect.Brokerages.GDAX
         /// </summary>
         public ConcurrentDictionary<long, GDAXFill> FillSplit { get; set; }
         private readonly string _passPhrase;
-        private const string SymbolMatching = "ETH|LTC|BTC|BCH";
+        private const string SymbolMatching = "ETH|LTC|BTC|BCH|XRP|EOS|XLM|ETC|ZRX";
         private readonly IAlgorithm _algorithm;
         private readonly CancellationTokenSource _canceller = new CancellationTokenSource();
         private readonly ConcurrentQueue<WebSocketMessage> _messageBuffer = new ConcurrentQueue<WebSocketMessage>();
         private volatile bool _streamLocked;
-        private readonly ConcurrentDictionary<Symbol, OrderBook> _orderBooks = new ConcurrentDictionary<Symbol, OrderBook>();
+        private readonly ConcurrentDictionary<Symbol, DefaultOrderBook> _orderBooks = new ConcurrentDictionary<Symbol, DefaultOrderBook>();
         private readonly bool _isDataQueueHandler;
 
         // GDAX has different rate limits for public and private endpoints
@@ -101,7 +101,12 @@ namespace QuantConnect.Brokerages.GDAX
                     "LTCUSD", "LTCEUR", "LTCBTC",
                     "BTCUSD", "BTCEUR", "BTCGBP",
                     "ETHBTC", "ETHUSD", "ETHEUR",
-                    "BCHBTC", "BCHUSD", "BCHEUR"
+                    "BCHBTC", "BCHUSD", "BCHEUR",
+                    "XRPUSD", "XRPEUR", "XRPBTC",
+                    "EOSUSD", "EOSEUR", "EOSBTC",
+                    "XLMUSD", "XLMEUR", "XLMBTC",
+                    "ETCUSD", "ETCEUR", "ETCBTC",
+                    "ZRXUSD", "ZRXEUR", "ZRXBTC",
                 };
                 Subscribe(tickers.Select(ticker => Symbol.Create(ticker, SecurityType.Crypto, Market.GDAX)));
             };
@@ -222,10 +227,10 @@ namespace QuantConnect.Brokerages.GDAX
 
                 var symbol = ConvertProductId(message.ProductId);
 
-                OrderBook orderBook;
+                DefaultOrderBook orderBook;
                 if (!_orderBooks.TryGetValue(symbol, out orderBook))
                 {
-                    orderBook = new OrderBook(symbol);
+                    orderBook = new DefaultOrderBook(symbol);
                     _orderBooks[symbol] = orderBook;
                 }
                 else
@@ -421,7 +426,7 @@ namespace QuantConnect.Brokerages.GDAX
                 : order.PriceCurrency;
 
             var orderFee = new OrderFee(new CashAmount(
-                GetFillFee(symbol, fillPrice, fillQuantity, isMaker),
+                GetFillFee(_algorithm.UtcTime, fillPrice, fillQuantity, isMaker),
                 currency));
 
             var orderEvent = new OrderEvent
@@ -629,14 +634,11 @@ namespace QuantConnect.Brokerages.GDAX
         /// <summary>
         /// Returns the fee paid for a total or partial order fill
         /// </summary>
-        public static decimal GetFillFee(Symbol symbol, decimal fillPrice, decimal fillQuantity, bool isMaker)
+        public static decimal GetFillFee(DateTime utcTime, decimal fillPrice, decimal fillQuantity, bool isMaker)
         {
-            if (isMaker)
-            {
-                return 0;
-            }
+            var feePercentage = GDAXFeeModel.GetFeePercentage(utcTime, isMaker);
 
-            return fillPrice * Math.Abs(fillQuantity) * GDAXFeeModel.TakerFee;
+            return fillPrice * Math.Abs(fillQuantity) * feePercentage;
         }
     }
 }

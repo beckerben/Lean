@@ -17,11 +17,15 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using QuantConnect.AlgorithmFactory;
 using QuantConnect.Data;
 using QuantConnect.Data.UniverseSelection;
 using QuantConnect.Interfaces;
 using QuantConnect.Lean.Engine.DataFeeds;
 using QuantConnect.Logging;
+using QuantConnect.Packets;
+using QuantConnect.Util;
+using HistoryRequest = QuantConnect.Data.HistoryRequest;
 
 namespace QuantConnect.Lean.Engine.Setup
 {
@@ -54,16 +58,11 @@ namespace QuantConnect.Lean.Engine.Setup
             var historyRequests = new List<HistoryRequest>();
             foreach (var cash in cashToUpdate)
             {
-                // if we already added a history request for this security, skip
-                if (historyRequests.Any(x => x.Symbol == cash.ConversionRateSecurity.Symbol))
-                {
-                    continue;
-                }
-
                 var configs = algorithm
                     .SubscriptionManager
                     .SubscriptionDataConfigService
-                    .GetSubscriptionDataConfigs(cash.ConversionRateSecurity.Symbol);
+                    .GetSubscriptionDataConfigs(cash.ConversionRateSecurity.Symbol,
+                        includeInternalConfigs:true);
 
                 var resolution = configs.GetHighestResolution();
                 var startTime = historyRequestFactory.GetStartTimeAlgoTz(
@@ -97,6 +96,53 @@ namespace QuantConnect.Lean.Engine.Setup
 
             Log.Trace("BaseSetupHandler.SetupCurrencyConversions():" +
                 $"{Environment.NewLine}{algorithm.Portfolio.CashBook}");
+        }
+
+        /// <summary>
+        /// Initialize the debugger
+        /// </summary>
+        /// <param name="algorithmNodePacket">The algorithm node packet</param>
+        /// <param name="workerThread">The worker thread instance to use</param>
+        public static bool InitializeDebugging(AlgorithmNodePacket algorithmNodePacket, WorkerThread workerThread)
+        {
+            var isolator = new Isolator();
+            return isolator.ExecuteWithTimeLimit(TimeSpan.FromMinutes(5),
+                () => DebuggerHelper.Initialize(algorithmNodePacket.Language),
+                algorithmNodePacket.RamAllocation,
+                sleepIntervalMillis: 100,
+                workerThread: workerThread);
+        }
+
+        /// <summary>
+        /// Sets the initial cash for the algorithm if set in the job packet.
+        /// </summary>
+        /// <remarks>Should be called after initialize <see cref="LoadBacktestJobAccountCurrency"/></remarks>
+        public static void LoadBacktestJobCashAmount(IAlgorithm algorithm, BacktestNodePacket job)
+        {
+            // set initial cash, if present in the job
+            if (job.CashAmount.HasValue)
+            {
+                // Zero the CashBook - we'll populate directly from job
+                foreach (var kvp in algorithm.Portfolio.CashBook)
+                {
+                    kvp.Value.SetAmount(0);
+                }
+
+                algorithm.SetCash(job.CashAmount.Value.Amount);
+            }
+        }
+
+        /// <summary>
+        /// Sets the account currency the algorithm should use if set in the job packet
+        /// </summary>
+        /// <remarks>Should be called before initialize <see cref="LoadBacktestJobCashAmount"/></remarks>
+        public static void LoadBacktestJobAccountCurrency(IAlgorithm algorithm, BacktestNodePacket job)
+        {
+            // set account currency if present in the job
+            if (job.CashAmount.HasValue)
+            {
+                algorithm.SetAccountCurrency(job.CashAmount.Value.Currency);
+            }
         }
     }
 }

@@ -17,6 +17,7 @@ using System;
 using System.Collections.Generic;
 using QuantConnect.Orders;
 using QuantConnect.Orders.Fees;
+using static QuantConnect.StringExtensions;
 
 namespace QuantConnect.Securities
 {
@@ -88,7 +89,7 @@ namespace QuantConnect.Securities
                 isSufficient = orderQuantity <= totalQuantity - openOrdersReservedQuantity;
                 if (!isSufficient)
                 {
-                    reason = $"Your portfolio holds {totalQuantity.Normalize()} {baseCurrency.BaseCurrencySymbol}, {openOrdersReservedQuantity.Normalize()} {baseCurrency.BaseCurrencySymbol} of which are reserved for open orders, but your Sell order is for {orderQuantity.Normalize()} {baseCurrency.BaseCurrencySymbol}. Cash Modeling trading does not permit short holdings so ensure you only sell what you have, including any additional open orders.";
+                    reason = Invariant($"Your portfolio holds {totalQuantity.Normalize()} {baseCurrency.BaseCurrencySymbol}, {openOrdersReservedQuantity.Normalize()} {baseCurrency.BaseCurrencySymbol} of which are reserved for open orders, but your Sell order is for {orderQuantity.Normalize()} {baseCurrency.BaseCurrencySymbol}. Cash Modeling trading does not permit short holdings so ensure you only sell what you have, including any additional open orders.");
                 }
 
                 return new HasSufficientBuyingPowerForOrderResult(isSufficient, reason);
@@ -117,7 +118,7 @@ namespace QuantConnect.Securities
                 isSufficient = orderQuantity <= Math.Abs(maximumQuantity);
                 if (!isSufficient)
                 {
-                    reason = $"Your portfolio holds {totalQuantity.Normalize()} {parameters.Security.QuoteCurrency.Symbol}, {openOrdersReservedQuantity.Normalize()} {parameters.Security.QuoteCurrency.Symbol} of which are reserved for open orders, but your Buy order is for {parameters.Order.AbsoluteQuantity.Normalize()} {baseCurrency.BaseCurrencySymbol}. Your order requires a total value of {orderQuantity.Normalize()} {parameters.Security.QuoteCurrency.Symbol}, but only a total value of {Math.Abs(maximumQuantity).Normalize()} {parameters.Security.QuoteCurrency.Symbol} is available.";
+                    reason = Invariant($"Your portfolio holds {totalQuantity.Normalize()} {parameters.Security.QuoteCurrency.Symbol}, {openOrdersReservedQuantity.Normalize()} {parameters.Security.QuoteCurrency.Symbol} of which are reserved for open orders, but your Buy order is for {parameters.Order.AbsoluteQuantity.Normalize()} {baseCurrency.BaseCurrencySymbol}. Your order requires a total value of {orderQuantity.Normalize()} {parameters.Security.QuoteCurrency.Symbol}, but only a total value of {Math.Abs(maximumQuantity).Normalize()} {parameters.Security.QuoteCurrency.Symbol} is available.");
                 }
 
                 return new HasSufficientBuyingPowerForOrderResult(isSufficient, reason);
@@ -139,7 +140,7 @@ namespace QuantConnect.Securities
             isSufficient = orderQuantity <= totalQuantity - openOrdersReservedQuantity - orderFee;
             if (!isSufficient)
             {
-                reason = $"Your portfolio holds {totalQuantity.Normalize()} {parameters.Security.QuoteCurrency.Symbol}, {openOrdersReservedQuantity.Normalize()} {parameters.Security.QuoteCurrency.Symbol} of which are reserved for open orders, but your Buy order is for {parameters.Order.AbsoluteQuantity.Normalize()} {baseCurrency.BaseCurrencySymbol}. Your order requires a total value of {orderQuantity.Normalize()} {parameters.Security.QuoteCurrency.Symbol}, but only a total value of {(totalQuantity - openOrdersReservedQuantity - orderFee).Normalize()} {parameters.Security.QuoteCurrency.Symbol} is available.";
+                reason = Invariant($"Your portfolio holds {totalQuantity.Normalize()} {parameters.Security.QuoteCurrency.Symbol}, {openOrdersReservedQuantity.Normalize()} {parameters.Security.QuoteCurrency.Symbol} of which are reserved for open orders, but your Buy order is for {parameters.Order.AbsoluteQuantity.Normalize()} {baseCurrency.BaseCurrencySymbol}. Your order requires a total value of {orderQuantity.Normalize()} {parameters.Security.QuoteCurrency.Symbol}, but only a total value of {(totalQuantity - openOrdersReservedQuantity - orderFee).Normalize()} {parameters.Security.QuoteCurrency.Symbol} is available.");
             }
 
             return new HasSufficientBuyingPowerForOrderResult(isSufficient, reason);
@@ -194,7 +195,7 @@ namespace QuantConnect.Securities
                 if (parameters.Security.QuoteCurrency.ConversionRate == 0)
                 {
                     return new GetMaximumOrderQuantityForTargetValueResult(0, "The internal cash feed required for converting" +
-                        $" {parameters.Security.QuoteCurrency.Symbol} to {parameters.Portfolio.CashBook.AccountCurrency} does not" +
+                        Invariant($" {parameters.Security.QuoteCurrency.Symbol} to {parameters.Portfolio.CashBook.AccountCurrency} does not") +
                         " have any data yet (or market may be closed).");
                 }
 
@@ -225,11 +226,19 @@ namespace QuantConnect.Securities
             orderQuantity -= orderQuantity % parameters.Security.SymbolProperties.LotSize;
             if (orderQuantity == 0)
             {
-                return new GetMaximumOrderQuantityForTargetValueResult(0, $"The order quantity is less than the lot size of {parameters.Security.SymbolProperties.LotSize} and has been rounded to zero.", false);
+                string reason = null;
+                if (!parameters.SilenceNonErrorReasons)
+                {
+                    reason = Invariant(
+                        $"The order quantity is less than the lot size of {parameters.Security.SymbolProperties.LotSize} and has been rounded to zero."
+                    );
+                }
+                return new GetMaximumOrderQuantityForTargetValueResult(0, reason, false);
             }
 
             // Just in case...
             var lastOrderQuantity = 0m;
+            var utcTime = parameters.Security.LocalTime.ConvertToUtc(parameters.Security.Exchange.TimeZone);
             do
             {
                 // Each loop will reduce the order quantity based on the difference between
@@ -250,20 +259,24 @@ namespace QuantConnect.Securities
                 orderQuantity -= orderQuantity % parameters.Security.SymbolProperties.LotSize;
                 if (orderQuantity <= 0)
                 {
-                    return new GetMaximumOrderQuantityForTargetValueResult(0, $"The order quantity is less than the lot size of {parameters.Security.SymbolProperties.LotSize} and has been rounded to zero." +
-                                                                              $"Target order value {targetOrderValue}. Order fees {orderFees}. Order quantity {orderQuantity}.");
+                    return new GetMaximumOrderQuantityForTargetValueResult(0,
+                        Invariant($"The order quantity is less than the lot size of {parameters.Security.SymbolProperties.LotSize} and has been rounded to zero.") +
+                        Invariant($"Target order value {targetOrderValue}. Order fees {orderFees}. Order quantity {orderQuantity}.")
+                    );
                 }
 
                 if (lastOrderQuantity == orderQuantity)
                 {
-                    throw new Exception($"GetMaximumOrderQuantityForTargetValue failed to converge to target order value {targetOrderValue}. " +
-                                        $"Current order value is {currentOrderValue}. Order quantity {orderQuantity}. Lot size is " +
-                                        $"{parameters.Security.SymbolProperties.LotSize}. Order fees {orderFees}. Security symbol {parameters.Security.Symbol}");
+                    throw new ArgumentException(
+                        Invariant($"GetMaximumOrderQuantityForTargetValue failed to converge to target order value {targetOrderValue}. ") +
+                        Invariant($"Current order value is {currentOrderValue}. Order quantity {orderQuantity}. Lot size is ") +
+                        Invariant($"{parameters.Security.SymbolProperties.LotSize}. Order fees {orderFees}. Security symbol {parameters.Security.Symbol}")
+                    );
                 }
                 lastOrderQuantity = orderQuantity;
 
                 // generate the order
-                var order = new MarketOrder(parameters.Security.Symbol, orderQuantity, DateTime.UtcNow);
+                var order = new MarketOrder(parameters.Security.Symbol, orderQuantity, utcTime);
                 var orderValue = orderQuantity * unitPrice;
 
                 var fees = parameters.Security.FeeModel.GetOrderFee(
@@ -310,7 +323,8 @@ namespace QuantConnect.Securities
             var quoteCurrencyPosition = portfolio.CashBook[security.QuoteCurrency.Symbol].Amount;
 
             // determine the unit price in terms of the quote currency
-            var unitPrice = new MarketOrder(security.Symbol, 1, DateTime.UtcNow).GetValue(security) / security.QuoteCurrency.ConversionRate;
+            var utcTime = parameters.Security.LocalTime.ConvertToUtc(parameters.Security.Exchange.TimeZone);
+            var unitPrice = new MarketOrder(security.Symbol, 1, utcTime).GetValue(security) / security.QuoteCurrency.ConversionRate;
             if (unitPrice == 0)
             {
                 return parameters.ResultInAccountCurrency(0m);

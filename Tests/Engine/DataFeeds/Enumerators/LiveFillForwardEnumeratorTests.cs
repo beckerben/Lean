@@ -51,7 +51,7 @@ namespace QuantConnect.Tests.Engine.DataFeeds.Enumerators
             var timeProvider = new ManualTimeProvider(TimeZones.NewYork);
             timeProvider.SetCurrentTime(reference);
             var exchange = new SecurityExchange(SecurityExchangeHours.AlwaysOpen(TimeZones.NewYork));
-            var fillForward = new LiveFillForwardEnumerator(timeProvider, underlying.GetEnumerator(), exchange, Ref.Create(Time.OneSecond), false, Time.EndOfTime, Time.OneSecond, exchange.TimeZone);
+            var fillForward = new LiveFillForwardEnumerator(timeProvider, underlying.GetEnumerator(), exchange, Ref.Create(Time.OneSecond), false, Time.EndOfTime, Time.OneSecond, exchange.TimeZone, Time.BeginningOfTime);
 
             // first point is always emitted
             Assert.IsTrue(fillForward.MoveNext());
@@ -104,6 +104,60 @@ namespace QuantConnect.Tests.Engine.DataFeeds.Enumerators
             Assert.AreEqual(timeProvider.GetUtcNow().ConvertFromUtc(TimeZones.NewYork), fillForward.Current.EndTime);
             Assert.IsTrue(fillForward.Current.IsFillForward);
             Assert.AreEqual(0, ((TradeBar)fillForward.Current).Volume);
+
+            fillForward.Dispose();
+        }
+
+        [Test]
+        public void HandlesDaylightSavingTimeChange()
+        {
+            var reference = new DateTime(2018, 3, 10);
+            var period = Time.OneDay;
+            var underlying = new List<TradeBar>
+            {
+                new TradeBar(reference, Symbols.SPY, 10, 20, 5, 15, 123456, period),
+                // Daylight Saving Time change -> add 1 hour
+                new TradeBar(reference.AddDays(1).AddHours(1), Symbols.SPY, 100, 200, 50, 150, 1234560, period)
+            };
+
+            var timeProvider = new ManualTimeProvider(TimeZones.NewYork);
+            timeProvider.SetCurrentTime(reference);
+            var exchange = new SecurityExchange(SecurityExchangeHours.AlwaysOpen(TimeZones.NewYork));
+            var fillForward = new LiveFillForwardEnumerator(
+                timeProvider,
+                underlying.GetEnumerator(),
+                exchange,
+                Ref.Create(Time.OneDay),
+                false,
+                Time.EndOfTime,
+                Time.OneDay,
+                exchange.TimeZone,
+                Time.BeginningOfTime);
+
+            // first point is always emitted
+            Assert.IsTrue(fillForward.MoveNext());
+            Assert.IsFalse(fillForward.Current.IsFillForward);
+            Assert.AreEqual(underlying[0], fillForward.Current);
+            //Assert.AreEqual(underlying[0].EndTime, fillForward.Current.EndTime);
+            Assert.AreEqual(123456, ((TradeBar)fillForward.Current).Volume);
+
+            // Daylight Saving Time change -> add 1 hour
+            timeProvider.SetCurrentTime(reference.AddDays(1).AddHours(1));
+
+            // second data point emitted
+            Assert.IsTrue(fillForward.MoveNext());
+            Assert.IsFalse(fillForward.Current.IsFillForward);
+            Assert.AreEqual(underlying[1], fillForward.Current);
+            //Assert.AreEqual(underlying[1].EndTime, fillForward.Current.EndTime);
+            Assert.AreEqual(1234560, ((TradeBar)fillForward.Current).Volume);
+
+            Assert.IsTrue(fillForward.MoveNext());
+            Assert.IsTrue(fillForward.Current.IsFillForward);
+            Assert.AreEqual(underlying[1].EndTime, fillForward.Current.Time);
+            Assert.AreEqual(underlying[1].Value, fillForward.Current.Value);
+            Assert.AreEqual(0, ((TradeBar)fillForward.Current).Volume);
+
+            fillForward.Dispose();
         }
     }
 }

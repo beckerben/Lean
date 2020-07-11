@@ -17,6 +17,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using Newtonsoft.Json;
 using QuantConnect.API;
 using QuantConnect.Data.Market;
@@ -31,7 +32,7 @@ namespace QuantConnect.Api
     /// <summary>
     /// QuantConnect.com Interaction Via API.
     /// </summary>
-    public class Api : IApi
+    public class Api : IApi, IDownloadProvider
     {
         private string _dataFolder;
 
@@ -557,11 +558,11 @@ namespace QuantConnect.Api
             var request = new RestRequest("data/read", Method.GET);
 
             request.AddParameter("format", "link");
-            request.AddParameter("ticker", symbol.Value.ToLower());
+            request.AddParameter("ticker", symbol.Value.ToLowerInvariant());
             request.AddParameter("type", symbol.ID.SecurityType.ToLower());
             request.AddParameter("market", symbol.ID.Market);
             request.AddParameter("resolution", resolution);
-            request.AddParameter("date", date.ToString("yyyyMMdd"));
+            request.AddParameter("date", date.ToStringInvariant("yyyyMMdd"));
 
             Link result;
             ApiConnection.TryRequest(request, out result);
@@ -713,8 +714,8 @@ namespace QuantConnect.Api
         public List<Data.Market.Split> GetSplits(DateTime from, DateTime to)
         {
             var request = new RestRequest("splits", Method.POST);
-            request.AddParameter("from", from.ToString("yyyyMMdd"));
-            request.AddParameter("to", from.ToString("yyyyMMdd"));
+            request.AddParameter("from", from.ToStringInvariant("yyyyMMdd"));
+            request.AddParameter("to", from.ToStringInvariant("yyyyMMdd"));
 
             SplitList splits;
             ApiConnection.TryRequest(request, out splits);
@@ -737,8 +738,8 @@ namespace QuantConnect.Api
         public List<Data.Market.Dividend> GetDividends(DateTime from, DateTime to)
         {
             var request = new RestRequest("dividends", Method.POST);
-            request.AddParameter("from", from.ToString("yyyyMMdd"));
-            request.AddParameter("to", from.ToString("yyyyMMdd"));
+            request.AddParameter("from", from.ToStringInvariant("yyyyMMdd"));
+            request.AddParameter("to", from.ToStringInvariant("yyyyMMdd"));
 
             DividendList dividends;
             ApiConnection.TryRequest(request, out dividends);
@@ -749,6 +750,34 @@ namespace QuantConnect.Api
                 s.DividendPerShare,
                 s.ReferencePrice)
             ).ToList();
+        }
+
+
+        /// <summary>
+        /// Local implementation for downloading data to algorithms
+        /// </summary>
+        /// <param name="address">URL to download</param>
+        /// <param name="headers">KVP headers</param>
+        /// <param name="userName">Username for basic authentication</param>
+        /// <param name="password">Password for basic authentication</param>
+        /// <returns></returns>
+        public virtual string Download(string address, IEnumerable<KeyValuePair<string, string>> headers, string userName, string password)
+        {
+            using (var client = new WebClient { Credentials = new NetworkCredential(userName, password) })
+            {
+                client.Proxy = WebRequest.GetSystemWebProxy();
+                if (headers != null)
+                {
+                    foreach (var header in headers)
+                    {
+                        client.Headers.Add(header.Key, header.Value);
+                    }
+                }
+                // Add a user agent header in case the requested URI contains a query.
+                client.Headers.Add("user-agent", "QCAlgorithm.Download(): User Agent Header");
+
+                return client.DownloadString(address);
+            }
         }
 
         /// <summary>
@@ -770,7 +799,7 @@ namespace QuantConnect.Api
         {
             // Create a new hash using current UTC timestamp.
             // Hash must be generated fresh each time.
-            var data = string.Format("{0}:{1}", token, timestamp);
+            var data = $"{token}:{timestamp.ToStringInvariant()}";
             return data.ToSHA256();
         }
     }

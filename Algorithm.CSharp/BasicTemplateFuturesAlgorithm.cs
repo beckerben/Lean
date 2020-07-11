@@ -1,4 +1,4 @@
-﻿/*
+/*
  * QUANTCONNECT.COM - Democratizing Finance, Empowering Individuals.
  * Lean Algorithmic Trading Engine v2.0. Copyright 2014 QuantConnect Corporation.
  *
@@ -19,8 +19,8 @@ using System.Collections.Generic;
 using System.Linq;
 using QuantConnect.Data;
 using QuantConnect.Interfaces;
-using QuantConnect.Orders;
 using QuantConnect.Securities;
+using QuantConnect.Securities.Future;
 
 namespace QuantConnect.Algorithm.CSharp
 {
@@ -34,6 +34,8 @@ namespace QuantConnect.Algorithm.CSharp
     /// <meta name="tag" content="futures" />
     public class BasicTemplateFuturesAlgorithm : QCAlgorithm, IRegressionAlgorithmDefinition
     {
+        private Symbol _contractSymbol;
+
         // S&P 500 EMini futures
         private const string RootSP500 = Futures.Indices.SP500EMini;
         public Symbol SP500 = QuantConnect.Symbol.Create(RootSP500, SecurityType.Future, Market.USA);
@@ -82,7 +84,8 @@ namespace QuantConnect.Algorithm.CSharp
                     // if found, trade it
                     if (contract != null)
                     {
-                        MarketOrder(contract.Symbol, 1);
+                        _contractSymbol = contract.Symbol;
+                        MarketOrder(_contractSymbol, 1);
                     }
                 }
             }
@@ -92,14 +95,17 @@ namespace QuantConnect.Algorithm.CSharp
             }
         }
 
-        /// <summary>
-        /// Order fill event handler. On an order fill update the resulting information is passed to this method.
-        /// </summary>
-        /// <param name="orderEvent">Order event details containing details of the evemts</param>
-        /// <remarks>This method can be called asynchronously and so should only be used by seasoned C# experts. Ensure you use proper locks on thread-unsafe objects</remarks>
-        public override void OnOrderEvent(OrderEvent orderEvent)
+        public override void OnEndOfAlgorithm()
         {
-            Log(orderEvent.ToString());
+            // Get the margin requirements
+            var buyingPowerModel = Securities[_contractSymbol].BuyingPowerModel;
+            var futureMarginModel = buyingPowerModel as FutureMarginModel;
+            if (buyingPowerModel == null)
+            {
+                throw new Exception($"Invalid buying power model. Found: {buyingPowerModel.GetType().Name}. Expected: {nameof(FutureMarginModel)}");
+            }
+            var initialOvernight = futureMarginModel?.InitialMarginRequirement;
+            var maintenanceOvernight = futureMarginModel?.MaintenanceMarginRequirement;
         }
 
         /// <summary>
@@ -124,18 +130,38 @@ namespace QuantConnect.Algorithm.CSharp
             {"Drawdown", "13.500%"},
             {"Expectancy", "-0.818"},
             {"Net Profit", "-13.517%"},
-            {"Sharpe Ratio", "-29.354"},
+            {"Sharpe Ratio", "-23.826"},
+            {"Probabilistic Sharpe Ratio", "0%"},
             {"Loss Rate", "89%"},
             {"Win Rate", "11%"},
             {"Profit-Loss Ratio", "0.69"},
-            {"Alpha", "-7.746"},
-            {"Beta", "-0.859"},
-            {"Annual Standard Deviation", "0.305"},
-            {"Annual Variance", "0.093"},
-            {"Information Ratio", "-24.985"},
-            {"Tracking Error", "0.414"},
-            {"Treynor Ratio", "10.413"},
-            {"Total Fees", "$15207.00"}
+            {"Alpha", "-7.042"},
+            {"Beta", "-0.992"},
+            {"Annual Standard Deviation", "0.373"},
+            {"Annual Variance", "0.139"},
+            {"Information Ratio", "-21.379"},
+            {"Tracking Error", "0.503"},
+            {"Treynor Ratio", "8.964"},
+            {"Total Fees", "$15207.00"},
+            {"Fitness Score", "0.033"},
+            {"Kelly Criterion Estimate", "-36.472"},
+            {"Kelly Criterion Probability Value", "0.82"},
+            {"Sortino Ratio", "-8.62"},
+            {"Return Over Maximum Drawdown", "-7.81"},
+            {"Portfolio Turnover", "302.321"},
+            {"Total Insights Generated", "8220"},
+            {"Total Insights Closed", "8218"},
+            {"Total Insights Analysis Completed", "8218"},
+            {"Long Insight Count", "4110"},
+            {"Short Insight Count", "0"},
+            {"Long/Short Ratio", "100%"},
+            {"Estimated Monthly Alpha Value", "$79.81579"},
+            {"Total Accumulated Estimated Alpha Value", "$8.425"},
+            {"Mean Population Estimated Insight Value", "$0.001025189"},
+            {"Mean Population Direction", "38.7618%"},
+            {"Mean Population Magnitude", "0%"},
+            {"Rolling Averaged Population Direction", "34.5315%"},
+            {"Rolling Averaged Population Magnitude", "0%"}
         };
     }
 }

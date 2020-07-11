@@ -17,6 +17,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using QuantConnect.Benchmarks;
 using QuantConnect.Data;
 using QuantConnect.Data.UniverseSelection;
 using QuantConnect.Interfaces;
@@ -41,6 +42,8 @@ namespace QuantConnect.Lean.Engine.DataFeeds
         private readonly Dictionary<DateTime, Dictionary<Symbol, Security>> _pendingSecurityAdditions = new Dictionary<DateTime, Dictionary<Symbol, Security>>();
         private readonly PendingRemovalsManager _pendingRemovalsManager;
         private readonly CurrencySubscriptionDataConfigManager _currencySubscriptionDataConfigManager;
+        private bool _initializedSecurityBenchmark;
+        private bool _anyDoesNotHaveFundamentalDataWarningLogged;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="UniverseSelection"/> class
@@ -58,8 +61,7 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             _currencySubscriptionDataConfigManager = new CurrencySubscriptionDataConfigManager(algorithm.Portfolio.CashBook,
                 algorithm.Securities,
                 algorithm.SubscriptionManager,
-                _securityService,
-                algorithm.BrokerageModel);
+                _securityService);
         }
 
         /// <summary>
@@ -80,7 +82,7 @@ namespace QuantConnect.Lean.Engine.DataFeeds
         /// <param name="universe">The universe to perform selection on</param>
         /// <param name="dateTimeUtc">The current date time in utc</param>
         /// <param name="universeData">The data provided to perform selection with</param>
-        public SecurityChanges  ApplyUniverseSelection(Universe universe, DateTime dateTimeUtc, BaseDataCollection universeData)
+        public SecurityChanges ApplyUniverseSelection(Universe universe, DateTime dateTimeUtc, BaseDataCollection universeData)
         {
             var algorithmEndDateUtc = _algorithm.EndDate.ConvertToUtc(_algorithm.TimeZone);
             if (dateTimeUtc > algorithmEndDateUtc)
@@ -103,8 +105,33 @@ namespace QuantConnect.Lean.Engine.DataFeeds
                     var fineCollection = new BaseDataCollection();
                     var dataProvider = new DefaultDataProvider();
 
+                    // Create a dictionary of CoarseFundamental keyed by Symbol that also has FineFundamental
+                    // Coarse raw data has SID collision on: CRHCY R735QTJ8XC9X
+                    var coarseData = universeData.Data.OfType<CoarseFundamental>()
+                        .Where(c => c.HasFundamentalData)
+                        .DistinctBy(c => c.Symbol)
+                        .ToDictionary(c => c.Symbol);
+
+                    // Remove selected symbols that does not have fine fundamental data
+                    var anyDoesNotHaveFundamentalData = false;
+                    selectSymbolsResult = selectSymbolsResult
+                        .Where(
+                            symbol =>
+                            {
+                                var result = coarseData.ContainsKey(symbol);
+                                anyDoesNotHaveFundamentalData |= !result;
+                                return result;
+                            }
+                        );
+
+                    if (!_anyDoesNotHaveFundamentalDataWarningLogged && anyDoesNotHaveFundamentalData)
+                    {
+                        _algorithm.Debug("Note: Your coarse selection filter was updated to exclude symbols without fine fundamental data. Make sure your coarse filter excludes symbols where HasFundamental is false.");
+                        _anyDoesNotHaveFundamentalDataWarningLogged = true;
+                    }
+
                     // use all available threads, the entire system is waiting for this to complete
-                    var options = new ParallelOptions{MaxDegreeOfParallelism = Environment.ProcessorCount};
+                    var options = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount };
                     Parallel.ForEach(selectSymbolsResult, options, symbol =>
                     {
                         var config = FineFundamentalUniverse.CreateConfiguration(symbol);
@@ -135,11 +162,6 @@ namespace QuantConnect.Lean.Engine.DataFeeds
                     // to the universeData dictionaries in SubscriptionSynchronizer and LiveTradingDataFeed and
                     // rely on reference semantics to work.
 
-                    // Coarse raw data has SID collision on: CRHCY R735QTJ8XC9X
-                    var coarseData = universeData.Data.OfType<CoarseFundamental>()
-                        .DistinctBy(c => c.Symbol)
-                        .ToDictionary(c => c.Symbol);
-
                     universeData.Data = new List<BaseData>();
                     foreach (var fine in fineCollection.Data.OfType<FineFundamental>())
                     {
@@ -149,6 +171,8 @@ namespace QuantConnect.Lean.Engine.DataFeeds
                             Time = fine.Time,
                             EndTime = fine.EndTime,
                             DataType = fine.DataType,
+                            AssetClassification = fine.AssetClassification,
+                            CompanyProfile = fine.CompanyProfile,
                             CompanyReference = fine.CompanyReference,
                             EarningReports = fine.EarningReports,
                             EarningRatios = fine.EarningRatios,
@@ -189,23 +213,25 @@ namespace QuantConnect.Lean.Engine.DataFeeds
                 selectSymbolsResult = universe.PerformSelection(dateTimeUtc, universeData);
             }
 
-            // check for no changes first
-            if (ReferenceEquals(selectSymbolsResult, Universe.Unchanged))
-            {
-                return SecurityChanges.None;
-            }
-
             // materialize the enumerable into a set for processing
             var selections = selectSymbolsResult.ToHashSet();
 
             var additions = new List<Security>();
             var removals = new List<Security>();
 
+            // first check for no pending removals, even if the universe selection
+            // didn't change we might need to remove a security because a position was closed
             RemoveSecurityFromUniverse(
                 _pendingRemovalsManager.CheckPendingRemovals(selections, universe),
                 removals,
                 dateTimeUtc,
                 algorithmEndDateUtc);
+
+            // check for no changes second
+            if (ReferenceEquals(selectSymbolsResult, Universe.Unchanged))
+            {
+                return SecurityChanges.None;
+            }
 
             // determine which data subscriptions need to be removed from this universe
             foreach (var member in universe.Members.Values)
@@ -245,6 +271,12 @@ namespace QuantConnect.Lean.Engine.DataFeeds
             // find new selections and add them to the algorithm
             foreach (var symbol in selections)
             {
+                if (universe.Securities.ContainsKey(symbol))
+                {
+                    // if its already part of the universe no need to re add it
+                    continue;
+                }
+
                 // create the new security, the algorithm thread will add this at the appropriate time
                 Security security;
                 if (!pendingAdditions.TryGetValue(symbol, out security) && !_algorithm.Securities.TryGetValue(symbol, out security))
@@ -253,9 +285,10 @@ namespace QuantConnect.Lean.Engine.DataFeeds
                     var configs = _algorithm.SubscriptionManager.SubscriptionDataConfigService.Add(symbol,
                         universe.UniverseSettings.Resolution,
                         universe.UniverseSettings.FillForward,
-                        universe.UniverseSettings.ExtendedMarketHours);
+                        universe.UniverseSettings.ExtendedMarketHours,
+                        dataNormalizationMode: universe.UniverseSettings.DataNormalizationMode);
 
-                    security =_securityService.CreateSecurity(symbol, configs, universe.UniverseSettings.Leverage, symbol.ID.SecurityType == SecurityType.Option);
+                    security = _securityService.CreateSecurity(symbol, configs, universe.UniverseSettings.Leverage, symbol.ID.SecurityType == SecurityType.Option);
 
                     pendingAdditions.Add(symbol, security);
 
@@ -312,8 +345,10 @@ namespace QuantConnect.Lean.Engine.DataFeeds
                 EnsureCurrencyDataFeeds(securityChanges);
             }
 
-            if (securityChanges != SecurityChanges.None)
+            if (securityChanges != SecurityChanges.None && Log.DebuggingEnabled)
             {
+                // for performance lets not create the message string if debugging is not enabled
+                // this can be executed many times and its in the algorithm thread
                 Log.Debug("UniverseSelection.ApplyUniverseSelection(): " + dateTimeUtc + ": " + securityChanges);
             }
 
@@ -325,10 +360,47 @@ namespace QuantConnect.Lean.Engine.DataFeeds
         /// </summary>
         /// <param name="utcStart">The current date time in utc</param>
         /// <returns>Will return true if any subscription was added</returns>
-        public bool AddPendingCurrencyDataFeeds(DateTime utcStart)
+        public bool AddPendingInternalDataFeeds(DateTime utcStart)
         {
             var added = false;
-            if (_currencySubscriptionDataConfigManager.UpdatePendingSubscriptionDataConfigs())
+            if (!_initializedSecurityBenchmark)
+            {
+                _initializedSecurityBenchmark = true;
+
+                var securityBenchmark = _algorithm.Benchmark as SecurityBenchmark;
+                if (securityBenchmark != null)
+                {
+                    // we want to start from the previous tradable bar so the benchmark security
+                    // never has 0 price
+                    var previousTradableBar = Time.GetStartTimeForTradeBars(
+                        securityBenchmark.Security.Exchange.Hours,
+                        utcStart.ConvertFromUtc(securityBenchmark.Security.Exchange.TimeZone),
+                        _algorithm.LiveMode ? Time.OneMinute : Time.OneDay,
+                        1,
+                        false).ConvertToUtc(securityBenchmark.Security.Exchange.TimeZone);
+
+                    var dataConfig = _algorithm.SubscriptionManager.SubscriptionDataConfigService.Add(
+                        securityBenchmark.Security.Symbol,
+                        _algorithm.LiveMode ? Resolution.Minute : Resolution.Hour,
+                        isInternalFeed: true,
+                        fillForward: false).First();
+
+                    if (dataConfig != null)
+                    {
+                        added |= _dataManager.AddSubscription(new SubscriptionRequest(
+                            false,
+                            null,
+                            securityBenchmark.Security,
+                            dataConfig,
+                            previousTradableBar,
+                            _algorithm.EndDate.ConvertToUtc(_algorithm.TimeZone)));
+
+                        Log.Trace($"UniverseSelection.AddPendingInternalDataFeeds(): Adding internal benchmark data feed {dataConfig}");
+                    }
+                }
+            }
+
+            if (_currencySubscriptionDataConfigManager.UpdatePendingSubscriptionDataConfigs(_algorithm.BrokerageModel))
             {
                 foreach (var subscriptionDataConfig in _currencySubscriptionDataConfigManager
                     .GetPendingSubscriptionDataConfigs())
@@ -351,7 +423,7 @@ namespace QuantConnect.Lean.Engine.DataFeeds
         /// </summary>
         public void EnsureCurrencyDataFeeds(SecurityChanges securityChanges)
         {
-            _currencySubscriptionDataConfigManager.EnsureCurrencySubscriptionDataConfigs(securityChanges);
+            _currencySubscriptionDataConfigManager.EnsureCurrencySubscriptionDataConfigs(securityChanges, _algorithm.BrokerageModel);
         }
 
         private void RemoveSecurityFromUniverse(

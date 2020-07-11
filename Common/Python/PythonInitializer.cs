@@ -14,7 +14,10 @@
  *
 */
 
+using System.Collections.Generic;
+using System.Linq;
 using Python.Runtime;
+using QuantConnect.Logging;
 
 namespace QuantConnect.Python
 {
@@ -33,12 +36,29 @@ namespace QuantConnect.Python
         {
             if (!_isBeginAllowThreadsCalled)
             {
+                Log.Trace("PythonInitializer.Initialize(): start...");
                 PythonEngine.Initialize();
 
                 // required for multi-threading usage
                 PythonEngine.BeginAllowThreads();
 
                 _isBeginAllowThreadsCalled = true;
+                Log.Trace("PythonInitializer.Initialize(): ended");
+            }
+        }
+
+        /// <summary>
+        /// Adds directories to the python path at runtime
+        /// </summary>
+        public static void AddPythonPaths(IEnumerable<string> paths)
+        {
+            if (_isBeginAllowThreadsCalled)
+            {
+                using (Py.GIL())
+                {
+                    var code = string.Join(";", paths.Select(s => $"sys.path.append('{s}')"));
+                    PythonEngine.Exec($"import sys;{code}");
+                }
             }
         }
     }

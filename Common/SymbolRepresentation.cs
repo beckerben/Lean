@@ -16,7 +16,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using QuantConnect.Securities;
+using QuantConnect.Securities.Future;
+using static QuantConnect.StringExtensions;
 
 namespace QuantConnect
 {
@@ -144,21 +145,16 @@ namespace QuantConnect
             var month = expiration.Month;
 
             // These futures expire in the month before the contract month
-            if (underlying == Futures.Energies.CrudeOilWTI ||
-                underlying == Futures.Energies.Gasoline ||
-                underlying == Futures.Energies.HeatingOil ||
-                underlying == Futures.Energies.NaturalGas)
-            {
-                if (month < 12)
-                {
-                    month++;
-                }
-                else
-                {
-                    month = 1;
-                    year++;
-                }
-            }
+            month += FuturesExpiryUtilityFunctions.ExpiresInPreviousMonth(underlying);
+            // Get the month back into the allowable range, allowing for a wrap 
+            // Below is a little algorithm for wrapping numbers with a certain bounds.
+            // In this case, were dealing with months, wrapping to years once we get to January
+            // As modulo works for [0, x), it's best to subtract 1 (as months are [1, 12] to convert to [0, 11]),
+            // do the modulo/integer division, then add 1 back on to get into the correct range again
+            month--;
+            year += month / 12;
+            month %= 12;
+            month++;
 
             return $"{underlying}{expiration.Day:00}{_futuresMonthLookup[month]}{year}";
         }
@@ -173,7 +169,7 @@ namespace QuantConnect
         {
             if (symbol.SecurityType != SecurityType.Option)
             {
-                throw new ArgumentException($"{nameof(GenerateOptionTickerOSI)} returns symbol to be an option, received {symbol.SecurityType}.");
+                throw new ArgumentException(Invariant($"{nameof(GenerateOptionTickerOSI)} returns symbol to be an option, received {symbol.SecurityType}."));
             }
 
             return GenerateOptionTickerOSI(symbol.Underlying.Value, symbol.ID.OptionRight, symbol.ID.StrikePrice, symbol.ID.Date);
@@ -191,7 +187,7 @@ namespace QuantConnect
         public static string GenerateOptionTickerOSI(string underlying, OptionRight right, decimal strikePrice, DateTime expiration)
         {
             if (underlying.Length > 5) underlying += " ";
-            return string.Format("{0,-6}{1}{2}{3:00000000}", underlying, expiration.ToString(DateFormat.SixCharacter), right.ToString()[0], strikePrice * 1000m);
+            return Invariant($"{underlying,-6}{expiration.ToStringInvariant(DateFormat.SixCharacter)}{right.ToString()[0]}{(strikePrice * 1000m):00000000}");
         }
 
         /// <summary>
@@ -207,7 +203,7 @@ namespace QuantConnect
             if (ticker[12] == 'C') right = OptionRight.Call;
             else if (ticker[12] == 'P') right = OptionRight.Put;
             else throw new FormatException($"Expected 12th character to be 'C' or 'P' for OptionRight: {ticker}");
-            var strike = decimal.Parse(ticker.Substring(13, 8)) / 1000m;
+            var strike = Parse.Decimal(ticker.Substring(13, 8)) / 1000m;
             var underlyingSid = SecurityIdentifier.GenerateEquity(underlying, Market.USA);
             var sid = SecurityIdentifier.GenerateOption(expiration, underlyingSid, Market.USA, strike, right, OptionStyle.American);
             return new Symbol(sid, ticker, new Symbol(underlyingSid, underlying));
@@ -245,7 +241,7 @@ namespace QuantConnect
             var optionTypeDelimiter = ticker.LastIndexOfAny(letterRange);
             var strikePriceString = ticker.Substring(optionTypeDelimiter + 1, ticker.Length - optionTypeDelimiter - 1);
 
-            var lookupResult = symbology[ticker[optionTypeDelimiter].ToString()];
+            var lookupResult = symbology[ticker[optionTypeDelimiter].ToStringInvariant()];
             var month = lookupResult.Item1;
             var optionRight = lookupResult.Item2;
 

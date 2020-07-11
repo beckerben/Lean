@@ -14,7 +14,6 @@
 */
 
 using System.Collections.Generic;
-using QuantConnect.Algorithm.Framework;
 using QuantConnect.Algorithm.Framework.Alphas;
 using QuantConnect.Algorithm.Framework.Execution;
 using QuantConnect.Algorithm.Framework.Portfolio;
@@ -26,7 +25,7 @@ using QuantConnect.Data.UniverseSelection;
 
 namespace QuantConnect.Algorithm.CSharp
 {
-    public class MeanVarianceOptimizationFrameworkAlgorithm : QCAlgorithmFramework, IRegressionAlgorithmDefinition
+    public class MeanVarianceOptimizationFrameworkAlgorithm : QCAlgorithm, IRegressionAlgorithmDefinition
     {
         private IEnumerable<Symbol> _symbols = (new string[] { "AIG", "BAC", "IBM", "SPY" }).Select(s => QuantConnect.Symbol.Create(s, SecurityType.Equity, Market.USA));
 
@@ -73,38 +72,45 @@ namespace QuantConnect.Algorithm.CSharp
         /// </summary>
         public Dictionary<string, string> ExpectedStatistics => new Dictionary<string, string>
         {
-            {"Total Trades", "11"},
-            {"Average Win", "0.33%"},
-            {"Average Loss", "-0.14%"},
-            {"Compounding Annual Return", "570.065%"},
-            {"Drawdown", "0.600%"},
-            {"Expectancy", "1.001"},
-            {"Net Profit", "2.640%"},
-            {"Sharpe Ratio", "8.542"},
-            {"Loss Rate", "40%"},
-            {"Win Rate", "60%"},
-            {"Profit-Loss Ratio", "2.33"},
-            {"Alpha", "0"},
-            {"Beta", "95.98"},
-            {"Annual Standard Deviation", "0.129"},
-            {"Annual Variance", "0.017"},
-            {"Information Ratio", "8.459"},
-            {"Tracking Error", "0.129"},
-            {"Treynor Ratio", "0.011"},
-            {"Total Fees", "$23.99"},
-            {"Total Insights Generated", "14"},
-            {"Total Insights Closed", "11"},
-            {"Total Insights Analysis Completed", "11"},
+            {"Total Trades", "13"},
+            {"Average Win", "0.13%"},
+            {"Average Loss", "-0.69%"},
+            {"Compounding Annual Return", "574.553%"},
+            {"Drawdown", "1.200%"},
+            {"Expectancy", "-0.403"},
+            {"Net Profit", "2.649%"},
+            {"Sharpe Ratio", "7.202"},
+            {"Probabilistic Sharpe Ratio", "75.341%"},
+            {"Loss Rate", "50%"},
+            {"Win Rate", "50%"},
+            {"Profit-Loss Ratio", "0.19"},
+            {"Alpha", "0.649"},
+            {"Beta", "0.808"},
+            {"Annual Standard Deviation", "0.185"},
+            {"Annual Variance", "0.034"},
+            {"Information Ratio", "4.546"},
+            {"Tracking Error", "0.107"},
+            {"Treynor Ratio", "1.652"},
+            {"Total Fees", "$25.45"},
+            {"Fitness Score", "0.68"},
+            {"Kelly Criterion Estimate", "13.755"},
+            {"Kelly Criterion Probability Value", "0.225"},
+            {"Sortino Ratio", "79228162514264337593543950335"},
+            {"Return Over Maximum Drawdown", "477.954"},
+            {"Portfolio Turnover", "0.68"},
+            {"Total Insights Generated", "17"},
+            {"Total Insights Closed", "14"},
+            {"Total Insights Analysis Completed", "14"},
             {"Long Insight Count", "6"},
-            {"Short Insight Count", "4"},
-            {"Long/Short Ratio", "150.0%"},
-            {"Estimated Monthly Alpha Value", "$-85612.32"},
-            {"Total Accumulated Estimated Alpha Value", "$-14744.34"},
-            {"Mean Population Estimated Insight Value", "$-1340.395"},
-            {"Mean Population Direction", "27.2727%"},
-            {"Mean Population Magnitude", "27.2727%"},
-            {"Rolling Averaged Population Direction", "5.8237%"},
-            {"Rolling Averaged Population Magnitude", "5.8237%"}
+            {"Short Insight Count", "7"},
+            {"Long/Short Ratio", "85.71%"},
+            {"Estimated Monthly Alpha Value", "$46431.9340"},
+            {"Total Accumulated Estimated Alpha Value", "$7996.6108"},
+            {"Mean Population Estimated Insight Value", "$571.1865"},
+            {"Mean Population Direction", "50%"},
+            {"Mean Population Magnitude", "50%"},
+            {"Rolling Averaged Population Direction", "12.6429%"},
+            {"Rolling Averaged Population Magnitude", "12.6429%"}
         };
     }
 }

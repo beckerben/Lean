@@ -51,7 +51,7 @@ namespace QuantConnect.ToolBox.IQFeed
         private const string NewLine = "\r\n";
         private const char Tabulation = '\t';
 
-        private IDataCacheProvider _dataCacheProvider = new ZipDataCacheProvider(new DefaultDataProvider());
+        private IDataCacheProvider _dataCacheProvider = new ZipDataCacheProvider(new DefaultDataProvider(), isDataEphemeral:true);
 
         // Database of all symbols
         // We store symbol data in memory by default (e.g. Equity, FX),
@@ -181,6 +181,16 @@ namespace QuantConnect.ToolBox.IQFeed
         }
 
         /// <summary>
+        /// Returns whether the time can be advanced or not.
+        /// </summary>
+        /// <param name="securityType">The security type</param>
+        /// <returns>true if the time can be advanced</returns>
+        public bool CanAdvanceTime(SecurityType securityType)
+        {
+            return true;
+        }
+
+        /// <summary>
         /// Private method updates internal collections of the class with new data loaded on demand (usually options, futures)
         /// </summary>
         /// <param name="placeholderSymbolData">Old data that contained reference to the symbol cache file</param>
@@ -232,7 +242,7 @@ namespace QuantConnect.ToolBox.IQFeed
 
             // we update the files every week
             var dayOfWeek = DateTimeFormatInfo.CurrentInfo.Calendar.GetWeekOfYear(DateTime.Today, CalendarWeekRule.FirstDay, DayOfWeek.Monday);
-            var thisYearWeek = DateTime.Today.ToString("yyyy") + "-" + dayOfWeek.ToString();
+            var thisYearWeek = $"{DateTime.Today.ToStringInvariant("yyyy")}-{dayOfWeek.ToStringInvariant()}";
 
             var todayZipFileName = "IQFeed-symbol-universe-" + thisYearWeek + ".zip";
             var todayFullZipName = Path.Combine(Globals.Cache, todayZipFileName);
@@ -443,7 +453,7 @@ namespace QuantConnect.ToolBox.IQFeed
         private IEnumerable<SymbolData> LoadSymbolOnDemand(SymbolData placeholder)
         {
             var dayOfWeek = DateTimeFormatInfo.CurrentInfo.Calendar.GetWeekOfYear(DateTime.Today, CalendarWeekRule.FirstDay, DayOfWeek.Monday);
-            var thisYearWeek = DateTime.Today.ToString("yyyy") + "-" + dayOfWeek.ToString();
+            var thisYearWeek = $"{DateTime.Today.ToStringInvariant("yyyy")}-{dayOfWeek.ToStringInvariant()}";
 
             var todayCsvFileName = "mktsymbols_v2.txt";
             var todayFullCsvName = Path.Combine(Globals.Cache, todayCsvFileName);

@@ -14,7 +14,6 @@
 */
 
 using System.Collections.Generic;
-using QuantConnect.Algorithm.Framework;
 using QuantConnect.Algorithm.Framework.Alphas;
 using QuantConnect.Algorithm.Framework.Execution;
 using QuantConnect.Algorithm.Framework.Portfolio;
@@ -27,7 +26,7 @@ namespace QuantConnect.Algorithm.CSharp
     /// <summary>
     /// Show cases how to use the <see cref="CompositeAlphaModel"/> to define
     /// </summary>
-    public class CompositeAlphaModelFrameworkAlgorithm : QCAlgorithmFramework, IRegressionAlgorithmDefinition
+    public class CompositeAlphaModelFrameworkAlgorithm : QCAlgorithm, IRegressionAlgorithmDefinition
     {
         public override void Initialize()
         {
@@ -79,18 +78,25 @@ namespace QuantConnect.Algorithm.CSharp
             {"Drawdown", "1.700%"},
             {"Expectancy", "-0.323"},
             {"Net Profit", "3.326%"},
-            {"Sharpe Ratio", "6.635"},
+            {"Sharpe Ratio", "7.387"},
+            {"Probabilistic Sharpe Ratio", "80.983%"},
             {"Loss Rate", "33%"},
             {"Win Rate", "67%"},
             {"Profit-Loss Ratio", "0.01"},
-            {"Alpha", "0"},
-            {"Beta", "152.178"},
-            {"Annual Standard Deviation", "0.253"},
-            {"Annual Variance", "0.064"},
-            {"Information Ratio", "6.594"},
-            {"Tracking Error", "0.253"},
-            {"Treynor Ratio", "0.011"},
+            {"Alpha", "0.79"},
+            {"Beta", "1.234"},
+            {"Annual Standard Deviation", "0.284"},
+            {"Annual Variance", "0.081"},
+            {"Information Ratio", "10.5"},
+            {"Tracking Error", "0.099"},
+            {"Treynor Ratio", "1.702"},
             {"Total Fees", "$67.00"},
+            {"Fitness Score", "0.499"},
+            {"Kelly Criterion Estimate", "0"},
+            {"Kelly Criterion Probability Value", "0"},
+            {"Sortino Ratio", "161.506"},
+            {"Return Over Maximum Drawdown", "1626.225"},
+            {"Portfolio Turnover", "0.499"},
             {"Total Insights Generated", "2"},
             {"Total Insights Closed", "0"},
             {"Total Insights Analysis Completed", "0"},
